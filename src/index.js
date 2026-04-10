@@ -1,6 +1,9 @@
 // src/index.js — Agent-StateSync SillyTavern Extension
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
+//
+// v2.1 — Added: connection status indicator (green/red dot),
+//          reconnect button, periodic health checking.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -39,6 +42,9 @@ const HISTORY_OPTIONS = [
     { value: 0, label: '0 (send all — no trimming)' },
 ];
 
+const HEALTH_CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
+const HEALTH_CHECK_TIMEOUT_MS = 5000;   // 5 second timeout per check
+
 const defaultSettings = {
     enabled: false,
     agentUrl: '',                // Blank = use SillyTavern's LLM API URL
@@ -62,6 +68,11 @@ let lastAssistantMsgHash = null;
 let lastConversationCount = 0;     // Number of non-system messages last request
 let currentSwipeIndex = 0;
 
+// Connection status tracking
+let agentConnected = false;        // Current connection state
+let healthCheckTimer = null;       // Interval timer for health checks
+let isReconnecting = false;        // Prevents spam-clicking reconnect
+
 // #############################################
 // # 3. Settings Get/Save/Sync
 // #############################################
@@ -83,7 +94,7 @@ function saveSettings(settings) {
 async function syncConfigToAgent(settings) {
     if (!settings.enabled) return;
 
-    const backendUrl = settings.agentUrl || null; // Will be resolved at request time
+    const backendUrl = settings.agentUrl || null;
     if (!backendUrl) {
         console.warn(`[${EXTENSION_NAME}] Cannot sync config — no Agent URL available yet. Will sync on first request.`);
         return;
@@ -117,7 +128,166 @@ async function syncConfigToAgent(settings) {
 }
 
 // #############################################
-// # 4. UI Rendering
+// # 4. Connection Health Check
+// #############################################
+
+/**
+ * Resolve the Agent URL for health checks.
+ * Uses the manual override if set, otherwise returns null (can't auto-detect without a request).
+ */
+function getHealthCheckUrl() {
+    const settings = getSettings();
+    if (!settings.enabled) return null;
+    if (!settings.agentUrl) return null;
+    return `http://${settings.agentUrl}/health`;
+}
+
+/**
+ * Ping the Agent's /health endpoint.
+ * Returns true if the Agent responded, false otherwise.
+ */
+async function checkAgentHealth() {
+    const url = getHealthCheckUrl();
+    if (!url) {
+        // No URL configured — we can't check. Stay disconnected.
+        setConnectionStatus(false, 'No Agent URL set');
+        return false;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
+
+        const resp = await fetch(url, {
+            method: 'GET',
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            const sessionCount = data.sessions || 0;
+            setConnectionStatus(true, `Connected — ${sessionCount} session(s)`);
+            return true;
+        } else {
+            setConnectionStatus(false, `Agent returned ${resp.status}`);
+            return false;
+        }
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            setConnectionStatus(false, 'Connection timed out');
+        } else {
+            setConnectionStatus(false, 'Agent not reachable');
+        }
+        return false;
+    }
+}
+
+/**
+ * Start the periodic health check loop.
+ */
+function startHealthChecks() {
+    stopHealthChecks();
+    // Check immediately, then on interval
+    checkAgentHealth();
+    healthCheckTimer = setInterval(() => {
+        checkAgentHealth();
+    }, HEALTH_CHECK_INTERVAL_MS);
+}
+
+/**
+ * Stop the periodic health check loop.
+ */
+function stopHealthChecks() {
+    if (healthCheckTimer !== null) {
+        clearInterval(healthCheckTimer);
+        healthCheckTimer = null;
+    }
+}
+
+/**
+ * Update the connection status indicator in the UI.
+ * @param {boolean} connected — true = green, false = red
+ * @param {string} text — tooltip / description text
+ */
+function setConnectionStatus(connected, text) {
+    agentConnected = connected;
+
+    // Update the status dot
+    const dot = $('#ass-connection-dot');
+    if (dot.length) {
+        dot.removeClass('ass-dot-green ass-dot-red')
+           .addClass(connected ? 'ass-dot-green' : 'ass-dot-red');
+        dot.attr('title', text || (connected ? 'Connected' : 'Disconnected'));
+    }
+
+    // Update the status text line
+    const statusText = $('#ass-connection-text');
+    if (statusText.length) {
+        statusText.text(text || (connected ? 'Connected' : 'Disconnected'));
+        statusText.css('color', connected ? '#5cb85c' : '#d9534f');
+    }
+
+    // Update the header dot (small inline indicator)
+    const headerDot = $('#ass-header-dot');
+    if (headerDot.length) {
+        headerDot.css('color', connected ? '#5cb85c' : '#d9534f');
+        headerDot.attr('title', text || (connected ? 'Connected' : 'Disconnected'));
+    }
+}
+
+/**
+ * Handle the Reconnect button click.
+ * Forces a health check + config re-sync immediately.
+ */
+async function handleReconnect() {
+    if (isReconnecting) return;
+    isReconnecting = true;
+
+    const btn = $('#ass-reconnect-btn');
+    const originalHtml = btn.html();
+
+    btn.html('<i class="fa-solid fa-spinner fa-spin"></i> Reconnecting...');
+    btn.prop('disabled', true);
+    setConnectionStatus(false, 'Reconnecting...');
+
+    try {
+        const settings = getSettings();
+        const url = getHealthCheckUrl();
+
+        if (!url) {
+            setConnectionStatus(false, 'No Agent URL configured');
+            toastr.warning('Set an Agent IP:Port first.', 'Agent-StateSync');
+            return;
+        }
+
+        // Try health check
+        const healthy = await checkAgentHealth();
+
+        if (healthy) {
+            // Re-sync config
+            configSynced = false;
+            await syncConfigToAgent(settings);
+            toastr.success('Reconnected to Agent!', 'Agent-StateSync');
+        } else {
+            toastr.error(
+                'Could not reach the Agent. Make sure it\'s running and the IP:Port is correct.',
+                'Agent-StateSync'
+            );
+        }
+    } catch (err) {
+        console.error(`[${EXTENSION_NAME}] Reconnect error:`, err);
+        setConnectionStatus(false, 'Reconnect failed');
+        toastr.error('Reconnect failed. Check console (F12).', 'Agent-StateSync');
+    } finally {
+        isReconnecting = false;
+        btn.html(originalHtml);
+        btn.prop('disabled', false);
+    }
+}
+
+// #############################################
+// # 5. UI Rendering
 // #############################################
 
 function buildOptions(items, selectedValue) {
@@ -126,16 +296,114 @@ function buildOptions(items, selectedValue) {
     ).join('');
 }
 
+function injectCustomCSS() {
+    // Only inject once
+    if ($('#ass-custom-css').length) return;
+
+    const css = `
+    <style id="ass-custom-css">
+        /* Connection status dot */
+        .ass-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 6px;
+            vertical-align: middle;
+            flex-shrink: 0;
+        }
+        .ass-dot-green {
+            background-color: #5cb85c;
+            box-shadow: 0 0 6px 2px rgba(92, 184, 92, 0.5);
+            animation: ass-pulse-green 2s ease-in-out infinite;
+        }
+        .ass-dot-red {
+            background-color: #d9534f;
+            box-shadow: 0 0 6px 2px rgba(217, 83, 79, 0.4);
+        }
+        @keyframes ass-pulse-green {
+            0%, 100% { box-shadow: 0 0 6px 2px rgba(92, 184, 92, 0.5); }
+            50% { box-shadow: 0 0 10px 4px rgba(92, 184, 92, 0.7); }
+        }
+        /* Header inline dot */
+        #ass-header-dot {
+            margin-left: 6px;
+            font-size: 10px;
+        }
+        /* Connection bar */
+        .ass-connection-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            background: rgba(128, 128, 128, 0.1);
+            border: 1px solid rgba(128, 128, 128, 0.2);
+        }
+        .ass-connection-info {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            min-width: 0;
+        }
+        .ass-connection-label {
+            font-size: 13px;
+            color: var(--fg_dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        /* Reconnect button */
+        .ass-reconnect-btn {
+            flex-shrink: 0;
+            margin-left: 10px;
+            padding: 4px 12px;
+            border: 1px solid rgba(128, 128, 128, 0.3);
+            border-radius: 4px;
+            background: rgba(128, 128, 128, 0.15);
+            color: var(--fg);
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .ass-reconnect-btn:hover {
+            background: rgba(128, 128, 128, 0.3);
+            border-color: rgba(128, 128, 128, 0.5);
+        }
+        .ass-reconnect-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>`;
+
+    $('head').append(css);
+}
+
 function renderSettingsUI() {
+    injectCustomCSS();
+
     const settingsHtml = `
     <div class="agent-statesync-extension">
         <hr class="sysHR">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
                 <b>Agent-StateSync</b>
+                <i id="ass-header-dot" class="fa-solid fa-circle" style="color: #d9534f; font-size: 10px; margin-left: 6px;" title="Disconnected"></i>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
+
+                <!-- Connection Status Bar -->
+                <div class="ass-connection-bar">
+                    <div class="ass-connection-info">
+                        <span id="ass-connection-dot" class="ass-dot ass-dot-red" title="Disconnected"></span>
+                        <span id="ass-connection-text" class="ass-connection-label">Not connected</span>
+                    </div>
+                    <button id="ass-reconnect-btn" class="ass-reconnect-btn" type="button">
+                        <i class="fa-solid fa-rotate-right"></i> Reconnect
+                    </button>
+                </div>
 
                 <!-- Enable Toggle -->
                 <div class="flex-container alignitemscenter margin-bot-10">
@@ -150,7 +418,7 @@ function renderSettingsUI() {
                     <label class="title_restorable">
                         <small>Agent IP:Port</small>
                     </label>
-                    <input type="text" id="ass-agent-url" class="text_pole wide" placeholder="192.168.0.1:8000">
+                    <input type="text" id="ass-agent-url" class="text_pole wide" placeholder="192.168.0.1:8001">
                     <small>
                         The FastAPI + LangGraph Agent. Leave blank to auto-detect from SillyTavern's LLM API URL.
                     </small>
@@ -234,7 +502,7 @@ function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- Status -->
+                <!-- Pipeline Status -->
                 <div class="margin-bot-10">
                     <small id="ass-status" style="color: var(--fg_dim);">
                         Status: Idle
@@ -269,7 +537,13 @@ function renderSettingsUI() {
         const settings = getSettings();
         settings.enabled = $(this).prop('checked');
         saveSettings(settings);
-        if (settings.enabled) onSettingChange();
+        if (settings.enabled) {
+            onSettingChange();
+            startHealthChecks();
+        } else {
+            stopHealthChecks();
+            setConnectionStatus(false, 'Extension disabled');
+        }
     });
 
     $('#ass-agent-url').on('change', function () {
@@ -278,6 +552,10 @@ function renderSettingsUI() {
         saveSettings(settings);
         configSynced = false; // Force re-sync with new URL
         onSettingChange();
+        // Restart health checks with new URL
+        if (settings.enabled) {
+            startHealthChecks();
+        }
     });
 
     $('#ass-rp-url').on('change', function () {
@@ -327,10 +605,18 @@ function renderSettingsUI() {
         settings.historyCount = parseInt($(this).val(), 10);
         saveSettings(settings);
     });
+
+    // --- Reconnect button ---
+    $('#ass-reconnect-btn').on('click', handleReconnect);
+
+    // --- Start health checks if extension is already enabled ---
+    if (s.enabled) {
+        startHealthChecks();
+    }
 }
 
 // #############################################
-// # 5. Utility Functions
+// # 6. Utility Functions
 // #############################################
 
 /**
@@ -358,7 +644,7 @@ function updateStatus(text, color) {
 }
 
 // #############################################
-// # 6. Session Management
+// # 7. Session Management
 // #############################################
 
 /**
@@ -478,7 +764,7 @@ async function initSession(backendUrl, sessionId) {
 }
 
 // #############################################
-// # 7. Message Type Detection
+// # 8. Message Type Detection
 // #############################################
 
 /**
@@ -549,7 +835,7 @@ async function incrementMessageId() {
 }
 
 // #############################################
-// # 8. History Trimming
+// # 9. History Trimming
 // #############################################
 
 /**
@@ -574,7 +860,7 @@ function trimHistory(messages, maxConversationMessages) {
 }
 
 // #############################################
-// # 9. [SYSTEM_META] Construction
+// # 10. [SYSTEM_META] Construction
 // #############################################
 
 /**
@@ -588,7 +874,7 @@ function buildMetaTag(sessionId, messageId, type, swipeIndex) {
 }
 
 // #############################################
-// # 10. Fetch Interception (Core Pipeline)
+// # 11. Fetch Interception (Core Pipeline)
 // #############################################
 
 function interceptFetch() {
@@ -705,7 +991,7 @@ function interceptFetch() {
 }
 
 // #############################################
-// # 11. Chat Event Hooks
+// # 12. Chat Event Hooks
 // #############################################
 
 /**
@@ -723,6 +1009,11 @@ function hookChatEvents() {
             lastConversationCount = 0;
             currentSwipeIndex = 0;
             configSynced = false; // Re-sync config for new chat context
+            // Trigger a fresh health check on chat change
+            const settings = getSettings();
+            if (settings.enabled) {
+                startHealthChecks();
+            }
         });
     }
 
@@ -732,7 +1023,7 @@ function hookChatEvents() {
 }
 
 // #############################################
-// # 12. Initialization
+// # 13. Initialization
 // #############################################
 
 (async function init() {
@@ -764,6 +1055,6 @@ function hookChatEvents() {
     hookChatEvents();
     interceptFetch();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.0`);
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.1`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
 })();
