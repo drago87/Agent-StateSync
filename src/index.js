@@ -158,26 +158,15 @@ function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- LLM Addresses -->
+                <!-- RP LLM -->
                 <div class="margin-bot-10">
                     <label class="title_restorable">
                         <small><b>RP LLM IP:Port</b> (Creative Writer)</small>
                     </label>
                     <input type="text" id="ass-rp-url" class="text_pole wide" placeholder="192.168.0.1:5001">
-                    <small>Koboldcpp / OpenAI-compatible endpoint for narrative generation.</small>
+                    <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Runs the creative model for narrative generation.</small>
                 </div>
 
-                <div class="margin-bot-10">
-                    <label class="title_restorable">
-                        <small><b>Instruct LLM IP:Port</b> (Data Logger)</small>
-                    </label>
-                    <input type="text" id="ass-instruct-url" class="text_pole wide" placeholder="192.168.0.1:11434">
-                    <small>Ollama / OpenAI-compatible endpoint for JSON state extraction.</small>
-                </div>
-
-                <hr class="sysHR">
-
-                <!-- Template Selections -->
                 <div class="margin-bot-10">
                     <label class="title_restorable">
                         <small>RP LLM Template</small>
@@ -185,6 +174,16 @@ function renderSettingsUI() {
                     <select id="ass-rp-template" class="text_pole wide">
                         ${buildOptions(TEMPLATE_OPTIONS, getSettings().rpTemplate)}
                     </select>
+                    <small>Message format template. Set to Raw if your endpoint handles its own formatting (e.g., Koboldcpp native mode).</small>
+                </div>
+
+                <!-- Instruct LLM -->
+                <div class="margin-bot-10">
+                    <label class="title_restorable">
+                        <small><b>Instruct LLM IP:Port</b> (Data Logger)</small>
+                    </label>
+                    <input type="text" id="ass-instruct-url" class="text_pole wide" placeholder="192.168.0.1:11434">
+                    <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Runs a smaller model for JSON state extraction.</small>
                 </div>
 
                 <div class="margin-bot-10">
@@ -194,6 +193,7 @@ function renderSettingsUI() {
                     <select id="ass-instruct-template" class="text_pole wide">
                         ${buildOptions(TEMPLATE_OPTIONS, getSettings().instructTemplate)}
                     </select>
+                    <small>Message format template. Set to Raw if your endpoint handles its own formatting (e.g., Ollama native mode).</small>
                 </div>
 
                 <hr class="sysHR">
