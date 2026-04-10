@@ -149,8 +149,7 @@ function getHealthCheckUrl() {
 async function checkAgentHealth() {
     const url = getHealthCheckUrl();
     if (!url) {
-        // No URL configured — we can't check. Stay disconnected.
-        setConnectionStatus(false, 'No Agent URL set');
+        // No URL or extension disabled — stay red
         return false;
     }
 
@@ -208,51 +207,40 @@ function stopHealthChecks() {
 /**
  * Update the connection status indicator in the UI.
  * @param {boolean} connected — true = green, false = red
- * @param {string} text — tooltip / description text
+ * @param {string} text — tooltip text shown on hover
  */
 function setConnectionStatus(connected, text) {
     agentConnected = connected;
 
-    // Update the status dot
+    // Update the status dot (inline next to the enable checkbox)
     const dot = $('#ass-connection-dot');
     if (dot.length) {
         dot.removeClass('ass-dot-green ass-dot-red')
            .addClass(connected ? 'ass-dot-green' : 'ass-dot-red');
         dot.attr('title', text || (connected ? 'Connected' : 'Disconnected'));
     }
-
-    // Update the status text line
-    const statusText = $('#ass-connection-text');
-    if (statusText.length) {
-        statusText.text(text || (connected ? 'Connected' : 'Disconnected'));
-        statusText.css('color', connected ? '#5cb85c' : '#d9534f');
-    }
-
-    // Update the header dot (small inline indicator)
-    const headerDot = $('#ass-header-dot');
-    if (headerDot.length) {
-        headerDot.css('color', connected ? '#5cb85c' : '#d9534f');
-        headerDot.attr('title', text || (connected ? 'Connected' : 'Disconnected'));
-    }
 }
 
 /**
  * Handle the Reconnect button click.
  * Forces a health check + config re-sync immediately.
+ * Only works when the extension is enabled.
  */
 async function handleReconnect() {
+    const settings = getSettings();
+    if (!settings.enabled) {
+        toastr.info('Enable State Sync first.', 'Agent-StateSync');
+        return;
+    }
     if (isReconnecting) return;
     isReconnecting = true;
 
     const btn = $('#ass-reconnect-btn');
-    const originalHtml = btn.html();
-
-    btn.html('<i class="fa-solid fa-spinner fa-spin"></i> Reconnecting...');
+    btn.addClass('fa-spin');
     btn.prop('disabled', true);
     setConnectionStatus(false, 'Reconnecting...');
 
     try {
-        const settings = getSettings();
         const url = getHealthCheckUrl();
 
         if (!url) {
@@ -281,7 +269,7 @@ async function handleReconnect() {
         toastr.error('Reconnect failed. Check console (F12).', 'Agent-StateSync');
     } finally {
         isReconnecting = false;
-        btn.html(originalHtml);
+        btn.removeClass('fa-spin');
         btn.prop('disabled', false);
     }
 }
@@ -325,40 +313,28 @@ function injectCustomCSS() {
             0%, 100% { box-shadow: 0 0 6px 2px rgba(92, 184, 92, 0.5); }
             50% { box-shadow: 0 0 10px 4px rgba(92, 184, 92, 0.7); }
         }
-        /* Header inline dot */
-        #ass-header-dot {
-            margin-left: 6px;
-            font-size: 10px;
-        }
-        /* Connection bar */
-        .ass-connection-bar {
+
+        /* Enable row — houses toggle + dot + reconnect all in one line */
+        .ass-enable-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 8px 10px;
             margin-bottom: 10px;
-            border-radius: 6px;
-            background: rgba(128, 128, 128, 0.1);
-            border: 1px solid rgba(128, 128, 128, 0.2);
         }
-        .ass-connection-info {
+        .ass-enable-row .checkbox_label {
+            margin: 0;
+            flex-shrink: 0;
+        }
+        .ass-enable-right {
             display: flex;
             align-items: center;
-            flex: 1;
-            min-width: 0;
-        }
-        .ass-connection-label {
-            font-size: 13px;
-            color: var(--fg_dim);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            gap: 8px;
+            flex-shrink: 0;
         }
         /* Reconnect button */
         .ass-reconnect-btn {
             flex-shrink: 0;
-            margin-left: 10px;
-            padding: 4px 12px;
+            padding: 3px 10px;
             border: 1px solid rgba(128, 128, 128, 0.3);
             border-radius: 4px;
             background: rgba(128, 128, 128, 0.15);
@@ -389,28 +365,22 @@ function renderSettingsUI() {
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
                 <b>Agent-StateSync</b>
-                <i id="ass-header-dot" class="fa-solid fa-circle" style="color: #d9534f; font-size: 10px; margin-left: 6px;" title="Disconnected"></i>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
 
-                <!-- Connection Status Bar -->
-                <div class="ass-connection-bar">
-                    <div class="ass-connection-info">
-                        <span id="ass-connection-dot" class="ass-dot ass-dot-red" title="Disconnected"></span>
-                        <span id="ass-connection-text" class="ass-connection-label">Not connected</span>
-                    </div>
-                    <button id="ass-reconnect-btn" class="ass-reconnect-btn" type="button">
-                        <i class="fa-solid fa-rotate-right"></i> Reconnect
-                    </button>
-                </div>
-
-                <!-- Enable Toggle -->
-                <div class="flex-container alignitemscenter margin-bot-10">
-                    <label class="checkbox_label margin-0" for="ass-toggle">
+                <!-- Enable Toggle + Status + Reconnect (all in one row) -->
+                <div class="ass-enable-row">
+                    <label class="checkbox_label" for="ass-toggle">
                         <input type="checkbox" id="ass-toggle">
                         <span>Enable State Sync</span>
                     </label>
+                    <div class="ass-enable-right">
+                        <span id="ass-connection-dot" class="ass-dot ass-dot-red" title="Disconnected"></span>
+                        <button id="ass-reconnect-btn" class="ass-reconnect-btn" type="button" title="Reconnect to Agent">
+                            <i class="fa-solid fa-rotate-right"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Agent URL -->
@@ -606,7 +576,7 @@ function renderSettingsUI() {
         saveSettings(settings);
     });
 
-    // --- Reconnect button ---
+    // --- Reconnect button (only functional when extension is enabled) ---
     $('#ass-reconnect-btn').on('click', handleReconnect);
 
     // --- Start health checks if extension is already enabled ---
