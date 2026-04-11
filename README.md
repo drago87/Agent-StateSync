@@ -1,3 +1,5 @@
+# WARNING Still untested
+
 # Agent-StateSync
 
 SillyTavern extension that manages world state synchronization with the [Pinokio-LangGraph Agent](https://github.com/drago87/Pinokio-LangGraph). Intercepts chat completion requests, injects session metadata, trims history, detects message types (new/continue/swipe/redo), and communicates with the FastAPI + LangGraph Agent backend.
