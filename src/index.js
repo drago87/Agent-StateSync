@@ -137,12 +137,18 @@ function renderSettingsUI() {
             </div>
             <div class="inline-drawer-content">
 
-                <!-- Enable Toggle -->
-                <div class="flex-container alignitemscenter margin-bot-10">
+                <!-- Enable Toggle + Connection Indicator -->
+                <div class="flex-container alignitemscenter justifySpaceBetween margin-bot-10">
                     <label class="checkbox_label margin-0" for="ass-toggle">
                         <input type="checkbox" id="ass-toggle">
                         <span>Enable State Sync</span>
                     </label>
+                    <div class="flex-container alignitemscenter" style="gap:10px;">
+                        <span id="ass-agent-dot" class="fa-solid fa-circle" style="font-size:8px;color:var(--fg_dim);opacity:0.4;" title="Agent not connected"></span>
+                        <button id="ass-test-connect" class="menu_button" style="padding:2px 10px;font-size:11px;" title="Test connection to Agent">
+                            Test Connect
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Agent URL -->
@@ -327,6 +333,29 @@ function renderSettingsUI() {
         settings.historyCount = parseInt($(this).val(), 10);
         saveSettings(settings);
     });
+
+    // --- Test Connect button ---
+    $('#ass-test-connect').on('click', async function () {
+        const btn = $(this);
+        const originalText = btn.text();
+        btn.text('Testing...').prop('disabled', true);
+
+        const ok = await pingAgent();
+
+        if (ok) {
+            btn.text('Connected ✓').css('color', 'var(--success-color, #5cb85c)');
+            updateStatus('Agent connected', '#5cb85c');
+        } else {
+            btn.text('Failed ✕').css('color', '#d9534f');
+            const settings = getSettings();
+            updateStatus('Agent unreachable' + (settings.agentUrl ? ` at ${settings.agentUrl}` : ' — set Agent IP:Port'), '#d9534f');
+        }
+
+        // Restore button text after 3 seconds
+        setTimeout(() => {
+            btn.text(originalText).css('color', '').prop('disabled', false);
+        }, 3000);
+    });
 }
 
 // #############################################
@@ -363,6 +392,75 @@ function updateStatus(text, color) {
     if (el.length) {
         el.text('Status: ' + text).css('color', color || 'var(--fg_dim)');
     }
+}
+
+// #############################################
+// # 5b. Agent Connectivity
+// #############################################
+
+/** Ping the Agent's /health endpoint and update the connection indicator dot.
+ *  Also POSTs to /api/ping so the dashboard ST Extension light stays green. */
+async function pingAgent() {
+    const dot = document.getElementById('ass-agent-dot');
+    const settings = getSettings();
+    const url = settings.agentUrl || null;
+
+    if (!url) {
+        // No URL configured — show dim gray
+        if (dot) {
+            dot.style.color = 'var(--fg_dim)';
+            dot.style.opacity = '0.4';
+            dot.title = 'No Agent URL set';
+        }
+        return false;
+    }
+
+    try {
+        const resp = await fetch(`http://${url}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(5000), // 5s timeout
+        });
+
+        if (resp.ok) {
+            if (dot) {
+                dot.style.color = 'var(--success-color, #5cb85c)';
+                dot.style.opacity = '1';
+                dot.title = `Agent connected — v${(await resp.json()).version || '?'}`;
+            }
+
+            // Also POST to /api/ping so the dashboard knows the extension is alive.
+            // Fire-and-forget — don't block on this or let failures affect the dot.
+            fetch(`http://${url}/api/ping`, {
+                method: 'POST',
+                signal: AbortSignal.timeout(3000),
+            }).catch(() => {});
+
+            return true;
+        } else {
+            if (dot) {
+                dot.style.color = '#f0ad4e';
+                dot.style.opacity = '1';
+                dot.title = `Agent responded with ${resp.status}`;
+            }
+            return false;
+        }
+    } catch (err) {
+        if (dot) {
+            dot.style.color = '#d9534f';
+            dot.style.opacity = '1';
+            dot.title = `Agent unreachable: ${err.message}`;
+        }
+        return false;
+    }
+}
+
+/** Start the periodic 5-minute ping to keep the connection indicator fresh. */
+function startAgentPingLoop() {
+    // Initial ping after 5 seconds (give ST time to load)
+    setTimeout(() => pingAgent(), 5000);
+
+    // Then every 5 minutes
+    setInterval(() => pingAgent(), 5 * 60 * 1000);
 }
 
 // #############################################
@@ -816,12 +914,6 @@ function injectCharMgmtButton() {
     const buttonBar = charPanel.querySelector('.form_create_bottom_buttons_block');
     if (!buttonBar) return;
 
-    // Find a known button to copy styling from
-    const refButton = buttonBar.querySelector('#export_button')
-                   || buttonBar.querySelector('#advanced_div')
-                   || buttonBar.querySelector('.menu_button');
-    if (!refButton) return;
-
     // Create our button as a <div> with menu_button class (matching ST's convention)
     const btn = document.createElement('div');
     btn.id = 'ass-char-mgmt-btn';
@@ -834,17 +926,21 @@ function injectCharMgmtButton() {
         openCharMgmtDialog();
     });
 
-    // Insert before the "More..." dropdown (which is a <label> after the button bar)
-    // This puts us at the end of the action buttons but before the dropdown
-    const moreDropdown = buttonBar.nextElementSibling;
-    if (moreDropdown && moreDropdown.querySelector('#char-management-dropdown')) {
-        buttonBar.appendChild(btn);
-    } else {
-        // Fallback: just append to end of button bar
-        buttonBar.appendChild(btn);
-    }
+    // Insert before the Delete button (right side of the button group).
+    // ST's delete button ID varies; try common selectors.
+    const deleteBtn = buttonBar.querySelector('#delete_character_button')
+        || buttonBar.querySelector('[id*="delete"]')
+        || buttonBar.querySelector('[title*="Delete" i], [title*="delete" i]');
 
-    console.log(`[${EXTENSION_NAME}] Injected Character Management button.`);
+    if (deleteBtn) {
+        // Insert right before the Delete button
+        deleteBtn.parentElement.insertBefore(btn, deleteBtn);
+        console.log(`[${EXTENSION_NAME}] Injected Character Management button (before Delete).`);
+    } else {
+        // Fallback: append at the end of the button bar
+        buttonBar.appendChild(btn);
+        console.log(`[${EXTENSION_NAME}] Injected Character Management button (end of bar — Delete button not found).`);
+    }
 }
 
 /**
@@ -1109,6 +1205,7 @@ function openCharMgmtDialog() {
     hookChatEvents();
     interceptFetch();
     setupCharMgmtButton();
+    startAgentPingLoop();
 
     console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.0`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
