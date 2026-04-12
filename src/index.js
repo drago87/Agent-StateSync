@@ -41,7 +41,9 @@ const HISTORY_OPTIONS = [
 
 const defaultSettings = {
     enabled: false,
-    agentUrl: '',                // Blank = use SillyTavern's LLM API URL
+    // agentUrl removed — ST's Custom Endpoint (Base URL) is now pointed
+    // at the Agent directly. The extension auto-detects the Agent URL from
+    // intercepted requests.
     rpLlmUrl: '192.168.0.1:5001',
     instructLlmUrl: '192.168.0.1:11434',
     rpTemplate: 'chatml',
@@ -62,6 +64,10 @@ let lastAssistantMsgHash = null;
 let lastConversationCount = 0;     // Number of non-system messages last request
 let currentSwipeIndex = 0;
 
+// Auto-detected Agent base URL (extracted from first intercepted request).
+// Format: "192.168.0.1:8001" (no protocol, no path).
+let _cachedAgentUrl = null;
+
 // #############################################
 // # 3. Settings Get/Save/Sync
 // #############################################
@@ -76,6 +82,22 @@ function saveSettings(settings) {
     context.saveSettingsDebounced();
 }
 
+/** Extract the base host:port from a full URL string. */
+function extractBaseUrl(urlString) {
+    try {
+        const urlObj = new URL(urlString);
+        const port = urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80');
+        return `${urlObj.hostname}:${port}`;
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Get the Agent base URL. Uses cached value from intercepted requests. */
+function getAgentUrl() {
+    return _cachedAgentUrl;
+}
+
 /**
  * Push LLM addresses + template config to the Agent so it knows
  * where to route requests without receiving them on every call.
@@ -83,9 +105,9 @@ function saveSettings(settings) {
 async function syncConfigToAgent(settings) {
     if (!settings.enabled) return;
 
-    const backendUrl = settings.agentUrl || null; // Will be resolved at request time
+    const backendUrl = getAgentUrl();
     if (!backendUrl) {
-        console.warn(`[${EXTENSION_NAME}] Cannot sync config — no Agent URL available yet. Will sync on first request.`);
+        console.warn(`[${EXTENSION_NAME}] Cannot sync config — Agent URL not detected yet. Will sync on first request.`);
         return;
     }
 
@@ -151,16 +173,10 @@ function renderSettingsUI() {
                     </div>
                 </div>
 
-                <!-- Agent URL -->
-                <div class="margin-bot-10">
-                    <label class="title_restorable">
-                        <small>Agent IP:Port</small>
-                    </label>
-                    <input type="text" id="ass-agent-url" class="text_pole wide" placeholder="192.168.0.1:8000">
-                    <small>
-                        The FastAPI + LangGraph Agent. Leave blank to auto-detect from SillyTavern's LLM API URL.
-                    </small>
-                </div>
+                <small style="color:var(--fg_dim);margin-bottom:8px;display:block;">
+                    Agent URL: <code id="ass-agent-url-display" style="font-size:11px;">auto-detecting...</code>
+                    <br>Point SillyTavern's Custom Endpoint (Base URL) to the Agent.
+                </small>
 
                 <hr class="sysHR">
 
@@ -247,6 +263,33 @@ function renderSettingsUI() {
                     </small>
                 </div>
 
+                <!-- Debug Exploration Panel -->
+                <hr class="sysHR">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <small><b>Debug: Context Explorer</b></small>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <p style="font-size:11px;color:var(--fg_dim);margin:0 0 8px;">
+                            Buttons to explore SillyTavern's context object. Useful for understanding what data is available for group chats.
+                        </p>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-chatid">chatId</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-charid">characterId</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-names">name1/name2</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-groups">groups</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-groupid">groupId</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-chars">characters</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-chatmeta">chatMetadata</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-mainapi">mainApi</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-ccsettings">chatCompletion</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;" id="ass-dbg-events">eventTypes</button>
+                            <button class="menu_button" style="padding:4px 10px;font-size:11px;background:rgba(248,81,73,0.15);color:#f85149;" id="ass-dbg-full">Full Context Dump</button>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>`;
@@ -256,7 +299,6 @@ function renderSettingsUI() {
     // --- Bind current values ---
     const s = getSettings();
     $('#ass-toggle').prop('checked', s.enabled);
-    $('#ass-agent-url').val(s.agentUrl);
     $('#ass-rp-url').val(s.rpLlmUrl);
     $('#ass-instruct-url').val(s.instructLlmUrl);
     $('#ass-rp-template').val(s.rpTemplate);
@@ -276,14 +318,6 @@ function renderSettingsUI() {
         settings.enabled = $(this).prop('checked');
         saveSettings(settings);
         if (settings.enabled) onSettingChange();
-    });
-
-    $('#ass-agent-url').on('change', function () {
-        const settings = getSettings();
-        settings.agentUrl = $(this).val().trim();
-        saveSettings(settings);
-        configSynced = false; // Force re-sync with new URL
-        onSettingChange();
     });
 
     $('#ass-rp-url').on('change', function () {
@@ -347,14 +381,182 @@ function renderSettingsUI() {
             updateStatus('Agent connected', '#5cb85c');
         } else {
             btn.text('Failed ✕').css('color', '#d9534f');
-            const settings = getSettings();
-            updateStatus('Agent unreachable' + (settings.agentUrl ? ` at ${settings.agentUrl}` : ' — set Agent IP:Port'), '#d9534f');
+            updateStatus('Agent unreachable — ensure ST Custom Endpoint points to Agent', '#d9534f');
         }
 
-        // Restore button text after 3 seconds
         setTimeout(() => {
             btn.text(originalText).css('color', '').prop('disabled', false);
         }, 3000);
+    });
+
+    // --- Debug Explorer Buttons ---
+    bindDebugButtons();
+}
+
+// #############################################
+// # 4b. Debug Context Explorer
+// #############################################
+
+/**
+ * Show a modal dialog with JSON-formatted data for debugging.
+ */
+function showDebugDialog(title, data) {
+    const jsonStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--bg1,#1a1a2e);border:1px solid var(--borderColor,#444);border-radius:12px;padding:20px;width:600px;max-width:90vw;max-height:80vh;display:flex;flex-direction:column;color:var(--fg,#ccc);';
+    dialog.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="margin:0;font-size:14px;">${esc(title)}</h3>
+            <button style="background:none;border:none;color:var(--fg,#ccc);cursor:pointer;font-size:16px;padding:4px 8px;" title="Close">✕</button>
+        </div>
+        <pre style="margin:0;padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;overflow:auto;flex:1;font-size:12px;line-height:1.5;max-height:60vh;white-space:pre-wrap;word-break:break-all;">${esc(jsonStr)}</pre>
+        <div style="margin-top:12px;text-align:right;">
+            <button style="padding:6px 16px;background:rgba(255,255,255,0.1);color:var(--fg,#ccc);border:1px solid var(--borderColor,#444);border-radius:6px;cursor:pointer;font-size:12px;">Close</button>
+        </div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    dialog.querySelector('button[title="Close"]').addEventListener('click', close);
+    dialog.querySelector('div > button:last-child').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+}
+
+/** Safe property reader — returns value or error string. */
+function safeGet(fn) {
+    try { return fn(); } catch (e) { return `<error: ${e.message}>`; }
+}
+
+/** Bind all debug explorer buttons. */
+function bindDebugButtons() {
+    // chatId
+    $('#ass-dbg-chatid').on('click', () => {
+        const data = {
+            context_chatId: safeGet(() => context.chatId),
+            getCurrentChatId: safeGet(() => typeof context.getCurrentChatId === 'function' ? context.getCurrentChatId() : 'not a function'),
+            type_chatId: safeGet(() => typeof context.chatId),
+        };
+        showDebugDialog('chatId', data);
+    });
+
+    // characterId
+    $('#ass-dbg-charid').on('click', () => {
+        const data = {
+            characterId: safeGet(() => context.characterId),
+            type: safeGet(() => typeof context.characterId),
+            name1_persona: safeGet(() => context.name1),
+            name2_character: safeGet(() => context.name2),
+        };
+        showDebugDialog('characterId / name1 / name2', data);
+    });
+
+    // groups
+    $('#ass-dbg-groups').on('click', () => {
+        const groups = safeGet(() => context.groups);
+        if (Array.isArray(groups)) {
+            // Summarize each group
+            const summary = groups.map((g, i) => {
+                const members = g.members || g.character_ids || [];
+                return {
+                    index: i,
+                    id: g.id,
+                    name: g.name || g.chat_id || '(unnamed)',
+                    chat_id: g.chat_id || '(none)',
+                    member_count: members.length,
+                    members: members.slice(0, 10),
+                };
+            });
+            showDebugDialog(`groups (${groups.length})`, summary);
+        } else {
+            showDebugDialog('groups', { value: groups, type: typeof groups });
+        }
+    });
+
+    // groupId
+    $('#ass-dbg-groupid').on('click', () => {
+        const data = {
+            groupId: safeGet(() => context.groupId),
+            type: safeGet(() => typeof context.groupId),
+            isGroup: safeGet(() => !!context.groupId && context.groupId !== false),
+        };
+        showDebugDialog('groupId', data);
+    });
+
+    // characters array
+    $('#ass-dbg-chars').on('click', () => {
+        const chars = safeGet(() => context.characters);
+        if (Array.isArray(chars)) {
+            const summary = chars.map((c, i) => ({
+                index: i,
+                name: c.name || '(unnamed)',
+                avatar: c.avatar || '(none)',
+                chat: c.chat || '(none)',
+                is_group: !!c.is_group,
+                is_user: !!c.is_user,
+            }));
+            showDebugDialog(`characters (${chars.length})`, summary);
+        } else {
+            showDebugDialog('characters', { value: chars, type: typeof chars });
+        }
+    });
+
+    // chatMetadata
+    $('#ass-dbg-chatmeta').on('click', () => {
+        showDebugDialog('chatMetadata', safeGet(() => context.chatMetadata));
+    });
+
+    // mainApi
+    $('#ass-dbg-mainapi').on('click', () => {
+        const data = {
+            mainApi: safeGet(() => context.mainApi),
+            onlineStatus: safeGet(() => context.onlineStatus),
+        };
+        showDebugDialog('mainApi / onlineStatus', data);
+    });
+
+    // chatCompletionSettings
+    $('#ass-dbg-ccsettings').on('click', () => {
+        const oai = safeGet(() => context.chatCompletionSettings);
+        if (oai && typeof oai === 'object') {
+            // Only show the API URL and model, not the full object
+            const summary = {
+                custom_url: oai.custom_url || oai.chat_completion_source || '(not set)',
+                model: oai.model || oai.openai_model || '(not set)',
+                api_type: typeof oai.chat_completion_source !== 'undefined' ? oai.chat_completion_source : '(unknown)',
+                all_keys: Object.keys(oai),
+            };
+            showDebugDialog('chatCompletionSettings (summary)', summary);
+        } else {
+            showDebugDialog('chatCompletionSettings', { value: oai, type: typeof oai });
+        }
+    });
+
+    // eventTypes
+    $('#ass-dbg-events').on('click', () => {
+        const types = safeGet(() => context.eventTypes);
+        showDebugDialog('eventTypes', types);
+    });
+
+    // Full Context Dump
+    $('#ass-dbg-full').on('click', () => {
+        const allKeys = Object.keys(context).sort();
+        const dump = {};
+        for (const key of allKeys) {
+            const val = context[key];
+            if (typeof val === 'function') {
+                dump[key] = '[function]';
+            } else if (Array.isArray(val)) {
+                dump[key] = `[Array(${val.length})]`;
+            } else if (val && typeof val === 'object') {
+                dump[key] = `[Object: ${Object.keys(val).join(', ')}]`;
+            } else {
+                dump[key] = val;
+            }
+        }
+        showDebugDialog(`Full Context (${allKeys.length} keys)`, dump);
     });
 }
 
@@ -394,6 +596,16 @@ function updateStatus(text, color) {
     }
 }
 
+/**
+ * Update the "Agent URL" display in settings.
+ */
+function updateAgentUrlDisplay() {
+    const el = document.getElementById('ass-agent-url-display');
+    if (el) {
+        el.textContent = _cachedAgentUrl || 'auto-detecting...';
+    }
+}
+
 // #############################################
 // # 5b. Agent Connectivity
 // #############################################
@@ -402,15 +614,13 @@ function updateStatus(text, color) {
  *  Also POSTs to /api/ping so the dashboard ST Extension light stays green. */
 async function pingAgent() {
     const dot = document.getElementById('ass-agent-dot');
-    const settings = getSettings();
-    const url = settings.agentUrl || null;
+    const url = getAgentUrl();
 
     if (!url) {
-        // No URL configured — show dim gray
         if (dot) {
             dot.style.color = 'var(--fg_dim)';
             dot.style.opacity = '0.4';
-            dot.title = 'No Agent URL set';
+            dot.title = 'Agent URL not detected yet — send a message first';
         }
         return false;
     }
@@ -418,7 +628,7 @@ async function pingAgent() {
     try {
         const resp = await fetch(`http://${url}/health`, {
             method: 'GET',
-            signal: AbortSignal.timeout(5000), // 5s timeout
+            signal: AbortSignal.timeout(5000),
         });
 
         if (resp.ok) {
@@ -428,8 +638,7 @@ async function pingAgent() {
                 dot.title = `Agent connected — v${(await resp.json()).version || '?'}`;
             }
 
-            // Also POST to /api/ping so the dashboard knows the extension is alive.
-            // Fire-and-forget — don't block on this or let failures affect the dot.
+            // Fire-and-forget heartbeat to light up dashboard ST Extension indicator
             fetch(`http://${url}/api/ping`, {
                 method: 'POST',
                 signal: AbortSignal.timeout(3000),
@@ -456,7 +665,7 @@ async function pingAgent() {
 
 /** Start the periodic 5-minute ping to keep the connection indicator fresh. */
 function startAgentPingLoop() {
-    // Initial ping after 5 seconds (give ST time to load)
+    // Initial ping after 5 seconds
     setTimeout(() => pingAgent(), 5000);
 
     // Then every 5 minutes
@@ -468,21 +677,34 @@ function startAgentPingLoop() {
 // #############################################
 
 /**
+ * Get the ST chat_id for the current chat.
+ * Tries context.chatId first, then getCurrentChatId().
+ */
+function getStChatId() {
+    try {
+        if (context.chatId) return context.chatId;
+    } catch (e) {}
+    try {
+        if (typeof context.getCurrentChatId === 'function') return context.getCurrentChatId();
+    } catch (e) {}
+    return null;
+}
+
+/**
  * Determine the Agent's IP:Port for the current request.
- * Uses the manual override if set, otherwise extracts from the request URL.
+ * Since ST is pointed at the Agent, we extract from the request URL.
  */
 function resolveBackendUrl(requestUrl, settings) {
-    if (settings.agentUrl && settings.agentUrl.length > 0) {
-        return settings.agentUrl;
+    const url = extractBaseUrl(requestUrl);
+    if (url) {
+        // Cache for future use (ping, proactive checks)
+        if (!_cachedAgentUrl) {
+            _cachedAgentUrl = url;
+            console.log(`[${EXTENSION_NAME}] Auto-detected Agent URL: ${url}`);
+            updateAgentUrlDisplay();
+        }
     }
-    try {
-        const urlObj = new URL(requestUrl);
-        const port = urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80');
-        return `${urlObj.hostname}:${port}`;
-    } catch (e) {
-        console.error(`[${EXTENSION_NAME}] Failed to parse URL:`, e);
-        return null;
-    }
+    return url;
 }
 
 /**
@@ -493,9 +715,7 @@ function resolveBackendUrl(requestUrl, settings) {
 async function ensureSession(backendUrl) {
     // --- Check if session already exists ---
     if (context.chatMetadata && context.chatMetadata[META_KEY_SESSION]) {
-        // Session exists. Check if it was initialized.
         if (!context.chatMetadata[META_KEY_INITIALIZED]) {
-            // Session created but init hasn't run yet (e.g., Agent was down)
             await initSession(backendUrl, context.chatMetadata[META_KEY_SESSION]);
         }
         return context.chatMetadata[META_KEY_SESSION];
@@ -534,16 +754,13 @@ async function ensureSession(backendUrl) {
 
 /**
  * Send character card + persona data to the Agent for initial world-state parsing.
- * Uses the Instruct LLM on the Agent side to extract structured state from
- * the character description and first message.
- * Called exactly once per session (tracked via chatMetadata flag).
+ * Includes the ST chat_id so the Agent can map it to this session.
  */
 async function initSession(backendUrl, sessionId) {
     console.log(`[${EXTENSION_NAME}] Initializing session ${sessionId} with character data...`);
     updateStatus('Initializing session...', '#f0ad4e');
 
     try {
-        // --- Extract character data from SillyTavern context ---
         const charName = context.name2 || '';
         const charDescription = context.description || '';
         const charPersonality = context.personality || '';
@@ -553,15 +770,15 @@ async function initSession(backendUrl, sessionId) {
         const personaName = context.name1 || '';
         const personaDescription = context.personaDescription || '';
 
-        // --- Read character config (mode, tracked_characters) from chatMetadata ---
         const charConfig = getCharConfig();
         const isMultiChar = (charDescription + charScenario).toLowerCase().includes('{{char}}') ||
                             (charDescription + charScenario).includes('character:');
 
-        // Parse tracked characters from comma-separated string
         let trackedList = charConfig.tracked_characters
             ? charConfig.tracked_characters.split(',').map(s => s.trim()).filter(Boolean)
             : [];
+
+        const stChatId = getStChatId();
 
         const initPayload = {
             character_name: charName,
@@ -575,6 +792,7 @@ async function initSession(backendUrl, sessionId) {
             mode: charConfig.mode,
             multi_character: isMultiChar || trackedList.length > 0,
             tracked_characters: trackedList.length > 0 ? trackedList : '',
+            st_chat_id: stChatId || '',
         };
 
         const resp = await fetch(`http://${backendUrl}/api/sessions/${sessionId}/init`, {
@@ -584,7 +802,7 @@ async function initSession(backendUrl, sessionId) {
         });
 
         if (resp.ok) {
-            console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized with character data.`);
+            console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized. st_chat_id=${stChatId}`);
             context.chatMetadata[META_KEY_INITIALIZED] = true;
             await context.saveMetadata();
             updateStatus('Session initialized', '#5cb85c');
@@ -594,6 +812,176 @@ async function initSession(backendUrl, sessionId) {
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Session init failed (Agent may be starting up):`, err.message);
     }
+}
+
+// #############################################
+// # 6b. Proactive Chat-Changed Hook
+// #############################################
+
+/**
+ * When the user switches chats or characters, proactively check
+ * if the Agent already has a session for this chat. If not, prompt
+ * the user to confirm sending character data.
+ */
+async function onChatChanged() {
+    console.log(`[${EXTENSION_NAME}] Chat changed — checking Agent...`);
+
+    const agentUrl = getAgentUrl();
+    if (!agentUrl) {
+        console.log(`[${EXTENSION_NAME}] No Agent URL cached yet — skipping proactive check.`);
+        return;
+    }
+
+    // Reset message detection state
+    lastUserMsgHash = null;
+    lastAssistantMsgHash = null;
+    lastConversationCount = 0;
+    currentSwipeIndex = 0;
+    configSynced = false;
+
+    // Get the ST chat_id
+    const stChatId = getStChatId();
+    if (!stChatId) {
+        console.log(`[${EXTENSION_NAME}] No ST chat_id available — skipping proactive check.`);
+        return;
+    }
+
+    // Check if the Agent has a session for this chat
+    try {
+        const resp = await fetch(
+            `http://${agentUrl}/api/sessions/by-chat?st_chat_id=${encodeURIComponent(stChatId)}`,
+            { signal: AbortSignal.timeout(5000) }
+        );
+
+        if (!resp.ok) {
+            console.warn(`[${EXTENSION_NAME}] /api/sessions/by-chat returned ${resp.status}`);
+            return;
+        }
+
+        const data = await resp.json();
+
+        if (data.found) {
+            // Session exists — restore session_id in chatMetadata
+            console.log(`[${EXTENSION_NAME}] Found existing session ${data.session_id} for chat ${stChatId}`);
+            context.chatMetadata = context.chatMetadata || {};
+            context.chatMetadata[META_KEY_SESSION] = data.session_id;
+
+            // If the session was initialized, mark it
+            if (data.initialized) {
+                context.chatMetadata[META_KEY_INITIALIZED] = true;
+            } else {
+                context.chatMetadata[META_KEY_INITIALIZED] = false;
+                // Try to initialize (Agent was down when first created)
+                await initSession(agentUrl, data.session_id);
+            }
+
+            await context.saveMetadata();
+            updateStatus(`Resumed session (${data.character_name || 'unknown'})`, '#5cb85c');
+        } else {
+            // No session — clear any stale session_id and prompt user
+            console.log(`[${EXTENSION_NAME}] No session for chat ${stChatId}`);
+
+            if (context.chatMetadata) {
+                delete context.chatMetadata[META_KEY_SESSION];
+                delete context.chatMetadata[META_KEY_INITIALIZED];
+                delete context.chatMetadata[META_KEY_COUNTER];
+                await context.saveMetadata();
+            }
+
+            // Ask user if they want to send character data to Agent
+            await promptNewSession(agentUrl, stChatId);
+        }
+    } catch (err) {
+        console.warn(`[${EXTENSION_NAME}] Proactive session check failed:`, err.message);
+    }
+}
+
+/**
+ * Show a confirmation dialog asking the user if they want to
+ * create a new Agent session for this chat.
+ */
+async function promptNewSession(agentUrl, stChatId) {
+    const charName = context.name2 || context.character_name || 'Unknown';
+    const settings = getSettings();
+
+    if (!settings.enabled) return; // Don't prompt if extension is disabled
+
+    // Use SillyTavern's callGenericPopup if available
+    if (context.callGenericPopup) {
+        const POPUP_TYPE = context.POPUP_TYPE?.CONFIRM;
+        const POPUP_RESULT = context.POPUP_RESULT;
+
+        try {
+            const result = await context.callGenericPopup(
+                `Send character data for <b>${esc(charName)}</b> to Agent-StateSync?`,
+                POPUP_TYPE?.CONFIRM || 'confirm'
+            );
+
+            // ST returns POPUP_RESULT.ACCEPTED or POPUP_RESULT.CANCELLED (or true/false)
+            if (result === (POPUP_RESULT?.ACCEPTED) || result === true || result === 1) {
+                updateStatus('Creating session...', '#f0ad4e');
+                await ensureSession(agentUrl);
+            } else {
+                updateStatus('Skipped session creation', '#f0ad4e');
+            }
+            return;
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] callGenericPopup failed, falling back to custom dialog:`, e.message);
+        }
+    }
+
+    // Fallback: custom dialog if callGenericPopup is not available
+    showNewSessionDialog(agentUrl, stChatId, charName);
+}
+
+/**
+ * Custom dialog fallback for session creation prompt.
+ */
+function showNewSessionDialog(agentUrl, stChatId, charName) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--SmartThemeBlurTintColor, var(--bg1, #1a1a2e));' +
+        'border:1px solid var(--borderColor, #444);border-radius:12px;padding:24px;width:400px;' +
+        'color:var(--fg, #ccc);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);';
+
+    dialog.innerHTML = `
+        <h3 style="margin:0 0 14px 0;color:var(--fg, #fff);font-size:16px;">
+            <i class="fa-solid fa-brain" style="color:var(--accent-color, #58a6ff);"></i>
+            Agent-StateSync — New Chat Detected
+        </h3>
+        <p style="margin:0 0 20px 0;font-size:13px;line-height:1.5;color:var(--fg,#ccc);">
+            No Agent session found for <b>${esc(charName)}</b>.<br>
+            Send character data to the Agent for state tracking?
+        </p>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button id="ass-new-sess-cancel" style="padding:8px 18px;background:rgba(255,255,255,0.06);color:var(--fg,#ccc);border:1px solid var(--borderColor,#444);border-radius:6px;cursor:pointer;font-size:13px;">Skip</button>
+            <button id="ass-new-sess-ok" style="padding:8px 22px;background:var(--accent-color,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Send to Agent</button>
+        </div>
+    `;
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    dialog.querySelector('#ass-new-sess-cancel').addEventListener('click', () => {
+        close();
+        updateStatus('Skipped session creation', '#f0ad4e');
+    });
+
+    dialog.querySelector('#ass-new-sess-ok').addEventListener('click', async () => {
+        close();
+        updateStatus('Creating session...', '#f0ad4e');
+        try {
+            await ensureSession(agentUrl);
+        } catch (e) {
+            console.error(`[${EXTENSION_NAME}] Session creation failed:`, e);
+            updateStatus('Session creation failed — check console', '#d9534f');
+        }
+    });
 }
 
 // #############################################
@@ -607,11 +995,9 @@ async function initSession(backendUrl, sessionId) {
  * Returns one of: 'new', 'continue', 'swipe', 'redo'
  */
 function detectMessageType(messages) {
-    // Separate system messages from conversation messages
     const convMsgs = messages.filter(m => m.role === 'user' || m.role === 'assistant');
     const convCount = convMsgs.length;
 
-    // Hash the last user and assistant messages
     const userMsgs = convMsgs.filter(m => m.role === 'user');
     const assistantMsgs = convMsgs.filter(m => m.role === 'assistant');
     const currentUserHash = hashStr(userMsgs.length > 0 ? userMsgs[userMsgs.length - 1].content : '');
@@ -619,31 +1005,25 @@ function detectMessageType(messages) {
 
     let type = 'new';
 
-    // No previous request to compare against — must be first request
     if (lastUserMsgHash === null) {
         type = 'new';
     }
-    // Same conversation length, same content as last request → Continue
     else if (convCount === lastConversationCount && currentUserHash === lastUserMsgHash && currentAssistantHash === lastAssistantMsgHash) {
         type = 'continue';
     }
-    // Same user message, different/missing assistant → Swipe
     else if (currentUserHash === lastUserMsgHash && currentAssistantHash !== lastAssistantMsgHash) {
         type = 'swipe';
         currentSwipeIndex++;
     }
-    // Conversation got shorter + user message changed → Redo (user edited a previous message)
     else if (convCount < lastConversationCount && currentUserHash !== lastUserMsgHash) {
         type = 'redo';
         currentSwipeIndex = 0;
     }
-    // New user message → New turn
     else if (currentUserHash !== lastUserMsgHash) {
         type = 'new';
         currentSwipeIndex = 0;
     }
 
-    // --- Update tracking state ---
     lastUserMsgHash = currentUserHash;
     lastAssistantMsgHash = currentAssistantHash;
     lastConversationCount = convCount;
@@ -651,13 +1031,8 @@ function detectMessageType(messages) {
     return type;
 }
 
-/**
- * Get or increment the message counter for the current chat.
- * Used as message_id in [SYSTEM_META].
- */
 function getMessageId() {
-    const counter = (context.chatMetadata?.[META_KEY_COUNTER] || 0);
-    return counter;
+    return (context.chatMetadata?.[META_KEY_COUNTER] || 0);
 }
 
 async function incrementMessageId() {
@@ -671,20 +1046,13 @@ async function incrementMessageId() {
 // # 8. History Trimming
 // #############################################
 
-/**
- * Trim the messages array to the last N user/assistant messages.
- * System messages (character card, lorebook, prompts) are always preserved.
- */
 function trimHistory(messages, maxConversationMessages) {
-    if (maxConversationMessages === 0) return messages; // 0 = no trimming
+    if (maxConversationMessages === 0) return messages;
 
     const systemMsgs = messages.filter(m => m.role === 'system');
     const convMsgs = messages.filter(m => m.role !== 'system');
-
-    // Keep last N non-system messages
     const trimmed = convMsgs.slice(-maxConversationMessages);
 
-    // Safety: always include the very last message (the current user input)
     if (convMsgs.length > 0 && trimmed.length > 0 && trimmed[trimmed.length - 1] !== convMsgs[convMsgs.length - 1]) {
         trimmed.push(convMsgs[convMsgs.length - 1]);
     }
@@ -696,12 +1064,6 @@ function trimHistory(messages, maxConversationMessages) {
 // # 9. [SYSTEM_META] Construction
 // #############################################
 
-/**
- * Build the [SYSTEM_META] tag with all per-request data.
- *
- * Format:
- * [SYSTEM_META] session_id=abc-123 message_id=5 type=new swipe_index=0
- */
 function buildMetaTag(sessionId, messageId, type, swipeIndex) {
     return `[SYSTEM_META] session_id=${sessionId} message_id=${messageId} type=${type} swipe_index=${swipeIndex}`;
 }
@@ -716,10 +1078,24 @@ function interceptFetch() {
     window.fetch = async function (url, options) {
         const settings = getSettings();
 
-        // --- Pass through if extension is disabled ---
+        // Pass through if extension is disabled
         if (!settings.enabled) {
             return originalFetch.call(window, url, options);
         }
+
+        // Cache the Agent URL from ANY request going to the Agent
+        // (not just chat completions — ST also sends /v1/models, etc.)
+        try {
+            const urlString = (url instanceof Request) ? url.url : String(url);
+            const base = extractBaseUrl(urlString);
+            if (base && !_cachedAgentUrl) {
+                _cachedAgentUrl = base;
+                console.log(`[${EXTENSION_NAME}] Auto-detected Agent URL from non-chat request: ${base}`);
+                updateAgentUrlDisplay();
+                // Start ping loop now that we have the URL
+                startAgentPingLoop();
+            }
+        } catch (e) {}
 
         // --- Check if this is a chat completion request ---
         let isChatRequest = false;
@@ -746,64 +1122,52 @@ function interceptFetch() {
             const backendUrl = resolveBackendUrl(urlString, settings);
 
             if (!backendUrl) {
-                throw new Error('Could not determine Agent URL. Set Agent IP:Port in settings.');
+                throw new Error('Could not determine Agent URL. Ensure SillyTavern is pointed at the Agent.');
             }
 
-            // --- Ensure session exists ---
+            // Ensure session exists
             const sessionId = await ensureSession(backendUrl);
             if (!sessionId) {
                 throw new Error('Failed to acquire session ID.');
             }
 
-            // --- Sync config to Agent on first request (if not already synced) ---
+            // Sync config on first request
             if (!configSynced) {
                 await syncConfigToAgent(settings);
             }
 
-            // --- Detect message type ---
+            // Detect message type
             const messageType = detectMessageType(bodyObject.messages);
             console.log(`[${EXTENSION_NAME}] Message type: ${messageType}, swipe_index: ${currentSwipeIndex}`);
 
-            // --- Update message counter ---
+            // Update message counter
             let messageId = getMessageId();
             if (messageType === 'new') {
                 messageId = await incrementMessageId();
             }
 
-            // --- Trim history ---
+            // Trim history
             bodyObject.messages = trimHistory(bodyObject.messages, settings.historyCount);
 
-            // --- Build and inject [SYSTEM_META] tag ---
+            // Build and inject [SYSTEM_META] tag
             const metaTag = buildMetaTag(sessionId, messageId, messageType, currentSwipeIndex);
             bodyObject.messages.unshift({
                 role: 'system',
                 content: metaTag,
             });
 
-            // --- Build fetch options ---
+            // Build fetch options — send to the ORIGINAL URL
+            // (which is already the Agent since ST is configured to point at it)
             const newOptions = { ...options, body: JSON.stringify(bodyObject) };
-
-            // --- Determine target URL ---
-            // If agentUrl is set, redirect to Agent. Otherwise, send to original URL
-            // (which should already be the Agent if ST is configured correctly).
-            let targetUrl = url;
-            if (settings.agentUrl && settings.agentUrl.length > 0) {
-                // Reconstruct URL with Agent address, preserving path and query
-                try {
-                    const urlObj = new URL(urlString);
-                    targetUrl = `http://${settings.agentUrl}${urlObj.pathname}${urlObj.search}`;
-                } catch (e) {
-                    targetUrl = `http://${settings.agentUrl}/v1/chat/completions`;
-                }
-            }
 
             console.log(`[${EXTENSION_NAME}] Injected [SYSTEM_META] → ${metaTag}`);
             console.log(`[${EXTENSION_NAME}] Messages trimmed to ${bodyObject.messages.length} (${settings.historyCount} conversation limit)`);
-            console.log(`[${EXTENSION_NAME}] Forwarding to: ${targetUrl}`);
+            console.log(`[${EXTENSION_NAME}] Forwarding to: ${urlString}`);
 
             updateStatus(`Active (${messageType})`, '#5cb85c');
 
-            return originalFetch.call(window, targetUrl, newOptions);
+            // Send to original URL (already the Agent)
+            return originalFetch.call(window, url, newOptions);
 
         } catch (err) {
             console.error(`[${EXTENSION_NAME}] Interception error:`, err);
@@ -827,54 +1191,33 @@ function interceptFetch() {
 // # 11. Chat Event Hooks
 // #############################################
 
-/**
- * Reset per-chat state when the user switches characters or opens a different chat.
- * SillyTavern fires various events; we hook into the chat-changed signal.
- */
+let _pingLoopStarted = false;
+
 function hookChatEvents() {
-    // Reset detection state when a new chat is loaded
     const eventBus = context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {
             console.log(`[${EXTENSION_NAME}] Chat changed — resetting detection state.`);
-            lastUserMsgHash = null;
-            lastAssistantMsgHash = null;
-            lastConversationCount = 0;
-            currentSwipeIndex = 0;
-            configSynced = false; // Re-sync config for new chat context
+            onChatChanged();
         });
     }
-
-    // Also reset when generating to catch edge cases
-    const originalGenerate = context.generate;
-    // (We don't override generate — the fetch interceptor handles everything.)
 }
 
 // #############################################
 // # 12. Character Management Panel Integration
 // #############################################
 
-/**
- * Storage keys in chatMetadata for per-chat character config.
- * These persist with the chat so each chat can have different tracked characters.
- */
 const CHAR_META_MODE = 'ass_char_mode';
 const CHAR_META_TRACKED = 'ass_char_tracked';
 
-/**
- * Read character config from current chat metadata.
- */
 function getCharConfig() {
     const meta = context.chatMetadata || {};
     return {
-        mode: meta[CHAR_META_MODE] || 'character',          // 'character' | 'scenario'
-        tracked_characters: meta[CHAR_META_TRACKED] || '',   // comma-separated string
+        mode: meta[CHAR_META_MODE] || 'character',
+        tracked_characters: meta[CHAR_META_TRACKED] || '',
     };
 }
 
-/**
- * Save character config to current chat metadata.
- */
 async function saveCharConfig(config) {
     context.chatMetadata = context.chatMetadata || {};
     context.chatMetadata[CHAR_META_MODE] = config.mode;
@@ -882,39 +1225,23 @@ async function saveCharConfig(config) {
     await context.saveMetadata();
 }
 
-/**
- * Inject an "Agent-StateSync" button into SillyTavern's Character Management
- * action bar (alongside Advanced Definitions, Export and Download, Delete Character).
- *
- * SillyTavern's character edit panel is `#rm_ch_create_block` (right sidebar).
- * The button bar is `.form_create_bottom_buttons_block`, containing divs like
- * `#advanced_div`, `#export_button`, `#delete_button` — all with class `menu_button`.
- *
- * We use a MutationObserver to detect when the panel opens and inject our button.
- */
 function setupCharMgmtButton() {
     const observer = new MutationObserver(() => {
         injectCharMgmtButton();
     });
     observer.observe(document.body, { childList: true, subtree: true });
-
-    // Also try immediately in case panel is already open
     injectCharMgmtButton();
 }
 
 function injectCharMgmtButton() {
-    // Already injected? Skip.
     if (document.getElementById('ass-char-mgmt-btn')) return;
 
-    // Find SillyTavern's character edit panel (right sidebar)
     const charPanel = document.getElementById('rm_ch_create_block');
     if (!charPanel) return;
 
-    // Find the button bar container
     const buttonBar = charPanel.querySelector('.form_create_bottom_buttons_block');
     if (!buttonBar) return;
 
-    // Create our button as a <div> with menu_button class (matching ST's convention)
     const btn = document.createElement('div');
     btn.id = 'ass-char-mgmt-btn';
     btn.className = 'menu_button fa-solid fa-brain';
@@ -926,31 +1253,19 @@ function injectCharMgmtButton() {
         openCharMgmtDialog();
     });
 
-    // Insert before the Delete button (right side of the button group).
-    // ST's delete button ID varies; try common selectors.
     const deleteBtn = buttonBar.querySelector('#delete_character_button')
         || buttonBar.querySelector('[id*="delete"]')
         || buttonBar.querySelector('[title*="Delete" i], [title*="delete" i]');
 
     if (deleteBtn) {
-        // Insert right before the Delete button
         deleteBtn.parentElement.insertBefore(btn, deleteBtn);
         console.log(`[${EXTENSION_NAME}] Injected Character Management button (before Delete).`);
     } else {
-        // Fallback: append at the end of the button bar
         buttonBar.appendChild(btn);
         console.log(`[${EXTENSION_NAME}] Injected Character Management button (end of bar — Delete button not found).`);
     }
 }
 
-/**
- * Open a modal dialog for configuring Agent-StateSync per-character settings.
- *
- * - Extraction Mode: character (track character state) vs scenario (track world state)
- * - Tracked Characters: comma-separated list for multi-character cards
- *
- * Settings are saved to chatMetadata and synced to the agent mid-session.
- */
 function openCharMgmtDialog() {
     const config = getCharConfig();
     const charName = context.name2 || context.character_name || 'Unknown';
@@ -961,7 +1276,6 @@ function openCharMgmtDialog() {
     const settings = getSettings();
     const sessionId = context.chatMetadata?.[META_KEY_SESSION];
 
-    // ── Build overlay + dialog ──
     const overlay = document.createElement('div');
     overlay.id = 'ass-char-mgmt-overlay';
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;';
@@ -978,14 +1292,12 @@ function openCharMgmtDialog() {
             Agent-StateSync — Character Config
         </h3>
 
-        <!-- Current character info -->
         <div style="margin-bottom:16px;padding:10px 12px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid var(--borderColor, #444);">
             <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${esc(charName)}</div>
             ${isMultiChar ? '<span style="font-size:11px;color:var(--fgdim, #888);background:rgba(88,166,255,0.15);padding:2px 6px;border-radius:4px;">Multi-character card detected</span>' : '<span style="font-size:11px;color:var(--fgdim, #888);">Single character card</span>'}
-            ${!settings.enabled ? '<div style="margin-top:6px;font-size:12px;color:#f0ad4e;">⚠ Agent-StateSync is currently disabled. Settings will be saved but not used until enabled.</div>' : ''}
+            ${!settings.enabled ? '<div style="margin-top:6px;font-size:12px;color:#f0ad4e;">⚠ Agent-StateSync is currently disabled.</div>' : ''}
         </div>
 
-        <!-- Extraction Mode -->
         <div style="margin-bottom:16px;">
             <label style="display:block;margin-bottom:6px;font-weight:600;font-size:13px;">Extraction Mode</label>
             <select id="ass-mode-select" style="width:100%;padding:8px 10px;background:rgba(255,255,255,0.06);color:var(--fg,#ccc);border:1px solid var(--borderColor,#444);border-radius:6px;font-size:13px;">
@@ -998,7 +1310,6 @@ function openCharMgmtDialog() {
             </small>
         </div>
 
-        <!-- Tracked Characters -->
         <div style="margin-bottom:16px;" id="ass-tracked-section">
             <label style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-weight:600;font-size:13px;">
                 Tracked Characters
@@ -1013,7 +1324,6 @@ function openCharMgmtDialog() {
             </small>
         </div>
 
-        <!-- Session status -->
         ${sessionId ? `
         <div style="margin-bottom:16px;padding:8px 10px;background:rgba(88,255,136,0.06);border:1px solid rgba(88,255,136,0.15);border-radius:6px;font-size:12px;color:var(--fgdim,#888);">
             <i class="fa-solid fa-link" style="color:#3fb950;"></i>
@@ -1027,7 +1337,6 @@ function openCharMgmtDialog() {
         </div>
         `}
 
-        <!-- Action buttons -->
         <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
             <button id="ass-char-mgmt-cancel" style="padding:8px 18px;background:rgba(255,255,255,0.06);color:var(--fg,#ccc);border:1px solid var(--borderColor,#444);border-radius:6px;cursor:pointer;font-size:13px;">Cancel</button>
             <button id="ass-char-mgmt-save" style="padding:8px 22px;background:var(--accent-color,#58a6ff);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Save</button>
@@ -1037,17 +1346,15 @@ function openCharMgmtDialog() {
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
-    // ── Dynamic tracked characters list ──
+    // Dynamic tracked characters list
     const trackedListEl = document.getElementById('ass-tracked-list');
     const inputStyle = 'flex:1;padding:7px 10px;background:rgba(255,255,255,0.06);color:var(--fg,#ccc);border:1px solid var(--borderColor,#444);border-radius:6px;font-size:13px;box-sizing:border-box;outline:none;';
     const rmBtnStyle = 'width:30px;height:30px;flex-shrink:0;padding:0;background:rgba(248,81,73,0.1);color:#f85149;border:1px solid rgba(248,81,73,0.2);border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;transition:background 0.15s;';
 
-    // Parse existing tracked chars from saved config
     const existingChars = config.tracked_characters
         ? config.tracked_characters.split(',').map(s => s.trim()).filter(Boolean)
         : [];
 
-    /** Create one tracked-char row (input + remove button) */
     function createTrackedRow(value = '') {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;align-items:center;';
@@ -1076,7 +1383,6 @@ function openCharMgmtDialog() {
         return row;
     }
 
-    /** Dim the X button when only 1 row remains so it can't be fully emptied */
     function updateRemoveButtons() {
         const count = trackedListEl.querySelectorAll('.ass-tracked-input').length;
         trackedListEl.querySelectorAll('button[title="Remove"]').forEach(btn => {
@@ -1085,7 +1391,6 @@ function openCharMgmtDialog() {
         });
     }
 
-    // Populate with existing tracked chars, or one empty row if none
     if (existingChars.length > 0) {
         existingChars.forEach(name => trackedListEl.appendChild(createTrackedRow(name)));
     } else {
@@ -1093,7 +1398,6 @@ function openCharMgmtDialog() {
     }
     updateRemoveButtons();
 
-    // Add character button
     document.getElementById('ass-add-char').addEventListener('click', () => {
         const row = createTrackedRow();
         trackedListEl.appendChild(row);
@@ -1101,7 +1405,6 @@ function openCharMgmtDialog() {
         row.querySelector('input').focus();
     });
 
-    // ── Mode change: show/hide tracked characters section ──
     const modeSelect = document.getElementById('ass-mode-select');
     const trackedSection = document.getElementById('ass-tracked-section');
     function updateTrackedVisibility() {
@@ -1110,22 +1413,16 @@ function openCharMgmtDialog() {
     modeSelect.addEventListener('change', updateTrackedVisibility);
     updateTrackedVisibility();
 
-    // ── Cancel ──
     document.getElementById('ass-char-mgmt-cancel').addEventListener('click', () => overlay.remove());
-
-    // ── Overlay click to close ──
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
-    // ── ESC to close ──
     const escHandler = (e) => {
         if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
     };
     document.addEventListener('keydown', escHandler);
 
-    // ── Save ──
     document.getElementById('ass-char-mgmt-save').addEventListener('click', async () => {
         const newMode = document.getElementById('ass-mode-select').value;
-        // Collect tracked characters from dynamic inputs
         const trackedInputs = trackedListEl.querySelectorAll('.ass-tracked-input');
         const trackedNames = [];
         trackedInputs.forEach(input => {
@@ -1134,36 +1431,25 @@ function openCharMgmtDialog() {
         });
         const newTracked = trackedNames.join(', ');
 
-        // Save to chatMetadata
         await saveCharConfig({ mode: newMode, tracked_characters: newTracked });
         console.log(`[${EXTENSION_NAME}] Character config saved: mode=${newMode}, tracked=[${trackedNames.length ? trackedNames.join(', ') : '(none)'}]`);
 
-        // Sync to agent mid-session
-        const settings = getSettings();
-        if (settings.enabled && sessionId) {
-            const backendUrl = settings.agentUrl || null;
-            if (backendUrl) {
-                try {
-                    const resp = await fetch(`http://${backendUrl}/api/sessions/${sessionId}/config`, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            mode: newMode,
-                            tracked_characters: newTracked,
-                        }),
-                    });
-                    if (resp.ok) {
-                        console.log(`[${EXTENSION_NAME}] Session config synced to Agent.`);
-                    } else {
-                        console.warn(`[${EXTENSION_NAME}] Session config sync returned ${resp.status}.`);
-                    }
-                } catch (err) {
-                    console.warn(`[${EXTENSION_NAME}] Failed to sync config to Agent:`, err.message);
+        const agentUrl = getAgentUrl();
+        if (settings.enabled && sessionId && agentUrl) {
+            try {
+                const resp = await fetch(`http://${agentUrl}/api/sessions/${sessionId}/config`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: newMode, tracked_characters: newTracked }),
+                });
+                if (resp.ok) {
+                    console.log(`[${EXTENSION_NAME}] Session config synced to Agent.`);
                 }
+            } catch (err) {
+                console.warn(`[${EXTENSION_NAME}] Failed to sync config to Agent:`, err.message);
             }
         }
 
-        // User feedback
         if (typeof toastr !== 'undefined') {
             toastr.success('Character config saved.', 'Agent-StateSync');
         }
@@ -1184,16 +1470,6 @@ function openCharMgmtDialog() {
 
     context = window.SillyTavern.getContext();
 
-    // Migrate old settings format if needed
-    if (context.extensionSettings[SETTINGS_KEY]) {
-        const stored = context.extensionSettings[SETTINGS_KEY];
-        // Rename manualOverride → agentUrl (backward compat)
-        if (stored.manualOverride !== undefined && !stored.agentUrl) {
-            stored.agentUrl = stored.manualOverride;
-            delete stored.manualOverride;
-        }
-    }
-
     // Initialize defaults if first run
     if (!context.extensionSettings[SETTINGS_KEY]) {
         context.extensionSettings[SETTINGS_KEY] = { ...defaultSettings };
@@ -1205,8 +1481,11 @@ function openCharMgmtDialog() {
     hookChatEvents();
     interceptFetch();
     setupCharMgmtButton();
-    startAgentPingLoop();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.0`);
+    // Don't start ping loop here — it will start once we detect the Agent URL
+    // from the first intercepted request (in interceptFetch).
+
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.2`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
+    console.log(`[${EXTENSION_NAME}] Agent URL: auto-detect from ST Custom Endpoint`);
 })();
