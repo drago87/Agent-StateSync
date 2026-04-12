@@ -2,9 +2,9 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.5 — Group data breakthrough: POST /api/groups/all with proper ST auth headers.
-//          Finds active group by chat_id match, resolves members to character objects.
-//          Removed all non-helpful debug buttons.
+// v2.6 — Phase 1: Proactive chat-changed hook with confirmation popup.
+//          Removed debug panel from UI. Group data auto-loaded on chat change.
+//          Session lookup by ST chat ID. st_chat_id persisted in Agent DB.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -40,7 +40,7 @@ const HISTORY_OPTIONS = [
     { value: 4, label: '4 messages' },
     { value: 6, label: '6 messages' },
     { value: 8, label: '8 messages' },
-    { value: 0, label: '0 (send all — no trimming)' },
+    { value: 0, label: '0 (send all - no trimming)' },
 ];
 
 const HEALTH_CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
@@ -78,6 +78,9 @@ let cachedGroups = null;           // All groups from /api/groups/all
 let activeGroup = null;            // The currently active group object (with resolved members)
 let activeGroupCharacters = [];    // Full Character objects for active group members
 let isGroupChat = false;           // Whether the current chat is a group chat
+
+// Proactive session tracking
+let proactiveInProgress = false;   // Prevents overlapping proactive calls
 
 // #############################################
 // # 3. Agent URL Resolution (Auto-Detect)
@@ -346,12 +349,8 @@ async function handleReconnect() {
 /**
  * Fetch all groups from ST's server API using proper auth headers.
  * ST's getGroups() uses POST /api/groups/all with getRequestHeaders().
- * The previous debug button got 404 because it called it as GET without auth.
- *
- * Returns the raw groups array from the server.
  */
 async function fetchGroupsFromServer() {
-    // Use ST's own auth headers
     let headers = {};
     if (typeof context.getRequestHeaders === 'function') {
         headers = context.getRequestHeaders({ omitContentType: true });
@@ -373,9 +372,6 @@ async function fetchGroupsFromServer() {
 /**
  * Find the currently active group by matching chat_id against
  * the current chat ID from ST's context.
- *
- * ST sets group.chat_id when opening a group chat (see openGroupChat in group-chats.js).
- * getCurrentChatId() returns the active chat ID string.
  */
 function findActiveGroup(groups) {
     const currentChatId = typeof context.getCurrentChatId === 'function'
@@ -417,15 +413,14 @@ function resolveGroupMemberCharacters(group) {
         if (char) {
             resolved.push(char);
         } else {
-            // Fallback: try matching by name (some older formats store names instead of avatars)
+            // Fallback: try matching by name
             const charByName = allChars.find(c => c.name === memberAvatar);
             if (charByName) {
                 resolved.push(charByName);
             } else {
-                // Store unresolved entry so we know it exists
                 resolved.push({
                     avatar: memberAvatar,
-                    name: memberAvatar.replace(/\.[^.]+$/, ''), // strip extension for display
+                    name: memberAvatar.replace(/\.[^.]+$/, ''),
                     _unresolved: true,
                 });
             }
@@ -438,8 +433,6 @@ function resolveGroupMemberCharacters(group) {
 /**
  * Main function: Load group data from ST's server, find active group,
  * resolve member characters, and cache everything for the interceptor.
- *
- * Returns { groups, activeGroup, members, isGroupChat }
  */
 async function loadGroupData() {
     cachedGroups = null;
@@ -486,249 +479,7 @@ async function loadGroupData() {
 }
 
 // #############################################
-// # 7. Debug Panel (Focused)
-// #############################################
-
-/**
- * Build the debug panel with only useful buttons.
- * - "Load Group Data": POST /api/groups/all with auth, find active group, resolve members
- * - "F12 Dump": Emergency full context dump
- */
-function buildDebugPanelHTML() {
-    return `
-    <div class="ass-debug-panel" style="border:1px solid rgba(255,255,0,0.3); border-radius:6px; padding:8px; margin-top:8px; background:rgba(0,0,0,0.15);">
-        <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-            <i class="fa-solid fa-bug" style="color:#f0ad4e;"></i>
-            <small><b>Debug Panel</b></small>
-        </div>
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
-            <button class="ass-dbg-btn menu_button" data-test="loadGroupData" style="border-color:rgba(92,184,92,0.5);" title="Fetch groups from ST server with auth, find active group, resolve members">
-                <i class="fa-solid fa-users"></i> Load Group Data
-            </button>
-            <button class="ass-dbg-btn menu_button" data-test="fullDump" style="border-color:rgba(217,83,79,0.5);" title="Logs everything to F12 console">
-                <i class="fa-solid fa-terminal"></i> F12 Dump
-            </button>
-        </div>
-        <div id="ass-dbg-output" style="margin-top:6px; display:none;">
-            <pre id="ass-dbg-output-text" style="
-                background: rgba(0,0,0,0.4);
-                border: 1px solid rgba(128,128,128,0.3);
-                border-radius: 4px;
-                padding: 6px 8px;
-                font-size: 11px;
-                color: #5cb85c;
-                white-space: pre-wrap;
-                word-break: break-all;
-                max-height: 400px;
-                overflow-y: auto;
-                margin: 0;
-            "></pre>
-        </div>
-    </div>`;
-}
-
-/**
- * Safely summarize a value for debug display.
- * Prevents crashes on circular refs or huge objects.
- */
-function safeSummarize(val, depth) {
-    depth = depth || 0;
-    if (depth > 2) return '(nested)';
-    if (val === null) return 'null';
-    if (val === undefined) return 'undefined';
-    const type = typeof val;
-    if (type === 'function') return 'function';
-    if (type === 'string' || type === 'number' || type === 'boolean') return JSON.stringify(val);
-    if (Array.isArray(val)) {
-        if (val.length === 0) return 'array[0] (empty)';
-        const items = val.slice(0, 5).map(v => safeSummarize(v, depth + 1));
-        const suffix = val.length > 5 ? ` ... (+${val.length - 5} more)` : '';
-        return `array[${val.length}]: [${items.join(', ')}${suffix}]`;
-    }
-    if (type === 'object') {
-        const keys = Object.keys(val);
-        if (keys.length === 0) return 'object{} (empty)';
-        const entries = keys.slice(0, 8).map(k => `${k}: ${safeSummarize(val[k], depth + 1)}`);
-        const suffix = keys.length > 8 ? ` ... (+${keys.length - 8} more)` : '';
-        return `object{${keys.length}}: {${entries.join(', ')}${suffix}}`;
-    }
-    return String(val);
-}
-
-/**
- * Run a debug test and show the result.
- */
-async function runDebugTest(testName) {
-    const outputDiv = $('#ass-dbg-output');
-    const outputText = $('#ass-dbg-output-text');
-    outputDiv.show();
-    outputText.text('Loading...');
-
-    let result = '';
-
-    try {
-        switch (testName) {
-            case 'loadGroupData': {
-                // Step 1: Show current context info
-                const currentChatId = typeof context.getCurrentChatId === 'function'
-                    ? context.getCurrentChatId()
-                    : null;
-
-                result = `=== Group Data Loader ===\n\n`;
-                result += `Current chat ID: ${JSON.stringify(currentChatId)}\n`;
-                result += `name1 (persona): ${JSON.stringify(context.name1)}\n`;
-                result += `name2: ${JSON.stringify(context.name2)}\n`;
-                result += `context.character: ${context.character ? context.character.name : 'undefined'}\n`;
-                result += `context.characters: array[${(context.characters || []).length}]\n`;
-                result += `\n--- Fetching POST /api/groups/all ---\n`;
-                outputText.text(result);
-
-                // Step 2: Fetch groups with proper auth
-                const groups = await fetchGroupsFromServer();
-                cachedGroups = groups;
-
-                result += `Got ${groups.length} groups from server\n`;
-
-                if (groups.length === 0) {
-                    result += `\nNo groups found. You may not have any groups created.`;
-                    break;
-                }
-
-                // Step 3: Show all groups briefly
-                result += `\n--- All Groups ---\n`;
-                for (let i = 0; i < groups.length; i++) {
-                    const g = groups[i];
-                    const memberCount = Array.isArray(g.members) ? g.members.length : 0;
-                    const disabledCount = Array.isArray(g.disabled_members) ? g.disabled_members.length : 0;
-                    result += `[${i}] "${g.name}" (id=${g.id}, chat_id=${JSON.stringify(g.chat_id)}, members=${memberCount}`;
-                    if (disabledCount > 0) result += `, disabled=${disabledCount}`;
-                    result += `)\n`;
-                }
-                outputText.text(result);
-
-                // Step 4: Find active group
-                const found = findActiveGroup(groups);
-
-                if (found) {
-                    activeGroup = found;
-                    isGroupChat = true;
-
-                    result += `\n=== ACTIVE GROUP FOUND ===\n`;
-                    result += `Name: "${found.name}"\n`;
-                    result += `ID: ${found.id}\n`;
-                    result += `chat_id: ${JSON.stringify(found.chat_id)}\n`;
-                    result += `Activation: ${found.activation_strategy} (0=Natural,1=List,2=Manual,3=Pooled)\n`;
-                    result += `Generation: ${found.generation_mode} (0=Swap,1=Append,2=Append_Disabled)\n`;
-                    result += `Allow self responses: ${found.allow_self_responses}\n`;
-                    result += `Members (avatar IDs): [${(found.members || []).join(', ')}]\n`;
-                    if (Array.isArray(found.disabled_members) && found.disabled_members.length > 0) {
-                        result += `Disabled: [${found.disabled_members.join(', ')}]\n`;
-                    }
-                    result += `Fav: ${found.fav}\n`;
-
-                    // Step 5: Resolve members to character objects
-                    activeGroupCharacters = resolveGroupMemberCharacters(found);
-
-                    result += `\n--- Resolved Members (${activeGroupCharacters.length}) ---\n`;
-                    for (let i = 0; i < activeGroupCharacters.length; i++) {
-                        const c = activeGroupCharacters[i];
-                        const unresolved = c._unresolved ? ' [UNRESOLVED]' : '';
-                        result += `\n[${i}] "${c.name}"${unresolved}\n`;
-                        result += `    avatar: ${JSON.stringify(c.avatar)}\n`;
-                        if (c.description) {
-                            result += `    description: ${(c.description || '').substring(0, 120)}...\n`;
-                        }
-                        if (c.personality) {
-                            result += `    personality: ${(c.personality || '').substring(0, 120)}...\n`;
-                        }
-                        if (c.data) {
-                            result += `    data keys: [${Object.keys(c.data).join(', ')}]\n`;
-                        }
-                        result += `    shallow: ${c.shallow}\n`;
-                    }
-
-                    // Step 6: Try unshallow
-                    if (typeof context.unshallowGroupMembers === 'function') {
-                        result += `\n--- Calling unshallowGroupMembers ---\n`;
-                        try {
-                            await context.unshallowGroupMembers(found.id);
-                            // Re-resolve after unshallow
-                            activeGroupCharacters = resolveGroupMemberCharacters(found);
-                            result += `Done. Checking if data changed...\n`;
-                            for (const c of activeGroupCharacters) {
-                                if (!c._unresolved && c.data) {
-                                    const descLen = (c.description || '').length;
-                                    result += `  ${c.name}: desc=${descLen} chars, shallow=${c.shallow}\n`;
-                                }
-                            }
-                        } catch (e) {
-                            result += `ERROR: ${e.message}\n`;
-                        }
-                    }
-
-                    // Log everything to F12
-                    console.log(`[${EXTENSION_NAME}] Active group:`, found);
-                    console.log(`[${EXTENSION_NAME}] Resolved members:`, activeGroupCharacters);
-                } else {
-                    result += `\n=== NO ACTIVE GROUP ===\n`;
-                    result += `No group matched chat_id ${JSON.stringify(currentChatId)}.\n`;
-                    result += `This is likely a single-character chat.\n`;
-                    isGroupChat = false;
-                }
-
-                break;
-            }
-
-            case 'fullDump': {
-                console.log(`[${EXTENSION_NAME}] ========== FULL CONTEXT DUMP ==========`);
-                const summary = {};
-                for (const key of Object.keys(context)) {
-                    const val = context[key];
-                    const type = typeof val;
-                    if (type === 'function') {
-                        summary[key] = 'function';
-                    } else if (Array.isArray(val)) {
-                        summary[key] = `array[${val.length}]`;
-                    } else if (type === 'object' && val !== null) {
-                        summary[key] = `object{${Object.keys(val).length}}`;
-                    } else {
-                        summary[key] = `${type}: ${JSON.stringify(val)}`;
-                    }
-                }
-                console.log(`[${EXTENSION_NAME}] Summary:`, summary);
-                console.log(`[${EXTENSION_NAME}] Full:`, context);
-
-                // Also dump cached group data
-                if (cachedGroups) {
-                    console.log(`[${EXTENSION_NAME}] Cached groups:`, cachedGroups);
-                }
-                if (activeGroup) {
-                    console.log(`[${EXTENSION_NAME}] Active group:`, activeGroup);
-                    console.log(`[${EXTENSION_NAME}] Active group members:`, activeGroupCharacters);
-                }
-
-                result = `Logged to F12.\n\n`;
-                result += `Cached groups: ${cachedGroups ? cachedGroups.length + ' groups' : 'none'}\n`;
-                result += `Active group: ${activeGroup ? '"' + activeGroup.name + '"' : 'none'}\n`;
-                result += `Group members: ${activeGroupCharacters.length}\n`;
-                result += `isGroupChat: ${isGroupChat}\n`;
-                result += `\n${JSON.stringify(summary, null, 2)}`;
-                break;
-            }
-
-            default:
-                result = `Unknown test: ${testName}`;
-        }
-    } catch (err) {
-        result += `\n\nERROR: ${err.message}\n${err.stack}`;
-    }
-
-    outputText.text(result);
-    console.log(`[${EXTENSION_NAME}] [Debug] ${testName}:\n${result}`);
-}
-
-// #############################################
-// # 8. Character Config Button (Action Bar)
+// # 7. Character Config Button (Action Bar)
 // #############################################
 
 /**
@@ -801,7 +552,7 @@ function injectCharConfigButton() {
 }
 
 // #############################################
-// # 9. UI Rendering
+// # 8. UI Rendering
 // #############################################
 
 function buildOptions(items, selectedValue) {
@@ -900,13 +651,6 @@ function injectCustomCSS() {
         .ass-url-display .ass-url-status {
             font-size: 11px;
             white-space: nowrap;
-        }
-
-        /* Debug buttons */
-        .ass-dbg-btn.menu_button {
-            font-size: 11px !important;
-            padding: 3px 8px !important;
-            flex-shrink: 0;
         }
     </style>`;
 
@@ -1037,9 +781,6 @@ function renderSettingsUI() {
                     </small>
                 </div>
 
-                <!-- Debug Panel -->
-                ${buildDebugPanelHTML()}
-
             </div>
         </div>
     </div>`;
@@ -1130,12 +871,6 @@ function renderSettingsUI() {
     // --- Reconnect button ---
     $('#ass-reconnect-btn').on('click', handleReconnect);
 
-    // --- Debug buttons ---
-    $(document).on('click', '.ass-dbg-btn', function () {
-        const testName = $(this).data('test');
-        if (testName) runDebugTest(testName);
-    });
-
     // --- Start health checks if extension is already enabled ---
     if (s.enabled) {
         startHealthChecks();
@@ -1159,7 +894,7 @@ function refreshAgentUrlDisplay() {
 }
 
 // #############################################
-// # 10. Utility Functions
+// # 9. Utility Functions
 // #############################################
 
 /**
@@ -1186,28 +921,210 @@ function updateStatus(text, color) {
 }
 
 // #############################################
-// # 11. Session Management
+// # 10. Proactive Chat-Changed Hook (Phase 1)
 // #############################################
 
 /**
- * Ensure a session_id exists for the current chat.
- * Creates one via POST /api/sessions if missing.
+ * Called when SillyTavern fires the 'chat-changed' event.
+ * Proactively looks up or creates an Agent session for the new chat.
+ *
+ * Flow:
+ * 1. Reset detection state + group cache
+ * 2. Load group data for new chat
+ * 3. Look up existing session via GET /api/sessions/by-chat?st_chat_id=<chatId>
+ * 4. If session found -> re-initialize with current character/group data
+ * 5. If no session -> show confirmation popup -> create new session
  */
-async function ensureSession(backendOrigin) {
-    // --- Check if session already exists ---
-    if (context.chatMetadata && context.chatMetadata[META_KEY_SESSION]) {
-        if (!context.chatMetadata[META_KEY_INITIALIZED]) {
-            await initSession(backendOrigin, context.chatMetadata[META_KEY_SESSION]);
-        }
-        return context.chatMetadata[META_KEY_SESSION];
+async function proactiveChatChanged() {
+    const settings = getSettings();
+    if (!settings.enabled) return;
+
+    const origin = getAgentOrigin();
+    if (!origin) {
+        console.log(`[${EXTENSION_NAME}] Chat changed but no Agent URL - will set up on first request`);
+        return;
     }
 
-    // --- Create new session ---
-    console.log(`[${EXTENSION_NAME}] No session ID. Creating session via ${backendOrigin}...`);
+    if (proactiveInProgress) {
+        console.log(`[${EXTENSION_NAME}] Proactive chat-changed already in progress, skipping`);
+        return;
+    }
+    proactiveInProgress = true;
+
     try {
-        const resp = await fetch(`${backendOrigin}/api/sessions`, {
+        // Step 1: Load group data for the new chat
+        updateStatus('Loading chat data...', '#5bc0de');
+        try {
+            await loadGroupData();
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] Group data load failed (single-char fallback):`, e.message);
+        }
+
+        const chatId = typeof context.getCurrentChatId === 'function'
+            ? context.getCurrentChatId()
+            : null;
+
+        if (!chatId) {
+            console.log(`[${EXTENSION_NAME}] Chat changed but no chat ID - skipping proactive setup`);
+            updateStatus('No chat ID', '#f0ad4e');
+            return;
+        }
+
+        // Step 2: Check if local metadata already has a session for this chat
+        const existingSessionId = context.chatMetadata?.[META_KEY_SESSION];
+
+        // Step 3: Ask the Agent if it has a session for this ST chat ID
+        let agentSessionId = null;
+        try {
+            const resp = await fetch(
+                `${origin}/api/sessions/by-chat?st_chat_id=${encodeURIComponent(chatId)}`
+            );
+
+            if (resp.ok) {
+                const data = await resp.json();
+                agentSessionId = data.session_id || null;
+                console.log(`[${EXTENSION_NAME}] Agent session lookup for chat "${chatId}": ${agentSessionId || 'none'}`);
+            } else {
+                console.warn(`[${EXTENSION_NAME}] Session lookup returned ${resp.status} (Agent may not support it yet)`);
+            }
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] Session lookup failed:`, e.message);
+        }
+
+        // Step 4: Determine what to do
+        if (agentSessionId) {
+            // Agent has a session for this chat - switch to it
+            await attachToExistingSession(origin, agentSessionId);
+        } else if (existingSessionId) {
+            // Local metadata has a session but Agent doesn't know about this chat ID
+            // This can happen if the Agent DB was reset. Re-link it.
+            try {
+                await fetch(`${origin}/api/sessions/${existingSessionId}/link-chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ st_chat_id: chatId }),
+                });
+                console.log(`[${EXTENSION_NAME}] Re-linked session ${existingSessionId} to chat ${chatId}`);
+            } catch (e) {
+                console.warn(`[${EXTENSION_NAME}] Failed to re-link session:`, e.message);
+            }
+            // Re-init with current character data
+            await initSession(origin, existingSessionId);
+            updateStatus(`Session ${existingSessionId.substring(0, 8)}...`, '#5cb85c');
+        } else {
+            // No session anywhere - ask user if they want to create one
+            await showNewChatConfirm(origin, chatId);
+        }
+
+    } catch (err) {
+        console.error(`[${EXTENSION_NAME}] Proactive chat-changed error:`, err);
+        updateStatus('Chat setup failed', '#d9534f');
+    } finally {
+        proactiveInProgress = false;
+    }
+}
+
+/**
+ * Attach to an existing Agent session found by ST chat ID.
+ * Updates local metadata and re-initializes with character/group data.
+ */
+async function attachToExistingSession(origin, sessionId) {
+    console.log(`[${EXTENSION_NAME}] Attaching to existing session: ${sessionId}`);
+    updateStatus('Reconnecting session...', '#f0ad4e');
+
+    try {
+        // Update local metadata to point to this session
+        context.chatMetadata = context.chatMetadata || {};
+        context.chatMetadata[META_KEY_SESSION] = sessionId;
+        context.chatMetadata[META_KEY_INITIALIZED] = false;
+        await context.saveMetadata();
+
+        // Re-initialize with current character/group data
+        await initSession(origin, sessionId);
+
+        // Sync config
+        configSynced = false;
+        await syncConfigToAgent(getSettings());
+
+        const shortId = sessionId.substring(0, 8);
+        const chatLabel = isGroupChat && activeGroup
+            ? `Group "${activeGroup.name}"`
+            : `"${context.name2 || 'Unknown'}"`;
+        toastr.success(`Resumed session (${shortId}...) for ${chatLabel}`, 'Agent-StateSync');
+        updateStatus(`Session ${shortId}...`, '#5cb85c');
+    } catch (err) {
+        console.error(`[${EXTENSION_NAME}] Session attach failed:`, err);
+        toastr.error(`Session attach failed: ${err.message}`, 'Agent-StateSync');
+        updateStatus('Session attach failed', '#d9534f');
+    }
+}
+
+/**
+ * Show a confirmation popup asking the user to create a new Agent session
+ * for the current chat.
+ */
+async function showNewChatConfirm(origin, chatId) {
+    const chatLabel = isGroupChat && activeGroup
+        ? `Group "${activeGroup.name}" (${activeGroupCharacters.length} members)`
+        : `Character "${context.name2 || 'Unknown'}"`;
+
+    const popupHtml = `
+        <div style="text-align:center; padding:8px 0;">
+            <h3 style="margin:0 0 8px 0;">
+                <i class="fa-solid fa-plug" style="color:#5bc0de;"></i>
+                Agent-StateSync
+            </h3>
+            <p style="margin:0 0 4px 0;"><b>New chat detected:</b></p>
+            <p style="margin:0 0 12px 0; color:var(--fg_dim);">${chatLabel}</p>
+            <p style="margin:0 0 4px 0;">Create a new Agent session for this chat?</p>
+            <p style="margin:0 0 12px 0; font-size:11px; color:var(--fg_dim);">
+                The Agent will initialize with this chat's character/group data.
+            </p>
+            <div style="display:flex; gap:8px; justify-content:center;">
+                <button id="ass-popup-yes" class="menu_button" style="border-color:rgba(92,184,92,0.5);">
+                    <i class="fa-solid fa-check"></i> Create Session
+                </button>
+                <button id="ass-popup-no" class="menu_button" style="border-color:rgba(217,83,79,0.5);">
+                    <i class="fa-solid fa-xmark"></i> Not Now
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Use ST's built-in callPopup if available
+    const popupFn = window.callPopup || context.callPopup;
+    if (typeof popupFn === 'function') {
+        try {
+            const confirmed = await popupFn(popupHtml, 'confirm');
+            if (confirmed) {
+                await createAndInitSession(origin, chatId);
+            } else {
+                updateStatus('No session (skipped)', '#f0ad4e');
+                console.log(`[${EXTENSION_NAME}] User declined session creation for chat ${chatId}`);
+            }
+            return;
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] callPopup failed, trying fallback:`, e.message);
+        }
+    }
+
+    // Fallback: auto-create without confirmation
+    console.log(`[${EXTENSION_NAME}] No popup available, auto-creating session`);
+    await createAndInitSession(origin, chatId);
+}
+
+/**
+ * Create a new Agent session linked to the current ST chat ID,
+ * then initialize it with character/group data.
+ */
+async function createAndInitSession(origin, chatId) {
+    try {
+        updateStatus('Creating session...', '#f0ad4e');
+
+        const resp = await fetch(`${origin}/api/sessions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ st_chat_id: chatId }),
         });
 
         if (!resp.ok) throw new Error(`Session API returned ${resp.status}`);
@@ -1216,7 +1133,69 @@ async function ensureSession(backendOrigin) {
         if (!data.session_id) throw new Error('Invalid session response');
 
         const sessionId = data.session_id;
-        console.log(`[${EXTENSION_NAME}] Session created: ${sessionId}`);
+        console.log(`[${EXTENSION_NAME}] Created session ${sessionId} for chat ${chatId}`);
+
+        // Save to metadata
+        context.chatMetadata = context.chatMetadata || {};
+        context.chatMetadata[META_KEY_SESSION] = sessionId;
+        context.chatMetadata[META_KEY_COUNTER] = 0;
+        await context.saveMetadata();
+
+        // Initialize with character/group data
+        await initSession(origin, sessionId);
+
+        // Sync config
+        configSynced = false;
+        await syncConfigToAgent(getSettings());
+
+        const shortId = sessionId.substring(0, 8);
+        toastr.success(`Session created: ${shortId}...`, 'Agent-StateSync');
+        updateStatus(`Session ${shortId}...`, '#5cb85c');
+    } catch (err) {
+        console.error(`[${EXTENSION_NAME}] Proactive session creation failed:`, err);
+        toastr.error(`Session creation failed: ${err.message}`, 'Agent-StateSync');
+        updateStatus('Session creation failed', '#d9534f');
+    }
+}
+
+// #############################################
+// # 11. Session Management
+// #############################################
+
+/**
+ * Ensure a session_id exists for the current chat.
+ * Used as fallback by the fetch interceptor if proactive setup didn't run.
+ * Creates one via POST /api/sessions if missing.
+ */
+async function ensureSession(backendOrigin) {
+    // --- Check if session already exists in metadata ---
+    if (context.chatMetadata && context.chatMetadata[META_KEY_SESSION]) {
+        if (!context.chatMetadata[META_KEY_INITIALIZED]) {
+            await initSession(backendOrigin, context.chatMetadata[META_KEY_SESSION]);
+        }
+        return context.chatMetadata[META_KEY_SESSION];
+    }
+
+    // --- Create new session (fallback - proactive should handle this) ---
+    console.log(`[${EXTENSION_NAME}] No session ID (proactive missed). Creating session...`);
+    try {
+        const chatId = typeof context.getCurrentChatId === 'function'
+            ? context.getCurrentChatId()
+            : null;
+
+        const resp = await fetch(`${backendOrigin}/api/sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ st_chat_id: chatId || '' }),
+        });
+
+        if (!resp.ok) throw new Error(`Session API returned ${resp.status}`);
+
+        const data = await resp.json();
+        if (!data.session_id) throw new Error('Invalid session response');
+
+        const sessionId = data.session_id;
+        console.log(`[${EXTENSION_NAME}] Fallback session created: ${sessionId}`);
 
         context.chatMetadata = context.chatMetadata || {};
         context.chatMetadata[META_KEY_SESSION] = sessionId;
@@ -1227,7 +1206,7 @@ async function ensureSession(backendOrigin) {
 
         return sessionId;
     } catch (err) {
-        console.error(`[${EXTENSION_NAME}] Session creation failed:`, err);
+        console.error(`[${EXTENSION_NAME}] Fallback session creation failed:`, err);
         throw err;
     }
 }
@@ -1471,7 +1450,7 @@ function interceptFetch() {
                 }
             }
 
-            // --- Ensure session exists ---
+            // --- Ensure session exists (fallback if proactive didn't run) ---
             const sessionId = await ensureSession(backendOrigin);
             if (!sessionId) {
                 throw new Error('Failed to acquire session ID.');
@@ -1551,7 +1530,7 @@ function hookChatEvents() {
     const eventBus = context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {
-            console.log(`[${EXTENSION_NAME}] Chat changed - resetting detection state and group data.`);
+            console.log(`[${EXTENSION_NAME}] Chat changed - proactive session setup`);
             lastUserMsgHash = null;
             lastAssistantMsgHash = null;
             lastConversationCount = 0;
@@ -1564,12 +1543,14 @@ function hookChatEvents() {
             activeGroupCharacters = [];
             isGroupChat = false;
 
-            // Refresh the Agent URL display (may change per-chat in some configs)
+            // Refresh the Agent URL display
             refreshAgentUrlDisplay();
 
             const settings = getSettings();
             if (settings.enabled) {
                 startHealthChecks();
+                // Proactive session setup for the new chat
+                proactiveChatChanged();
             }
         });
     }
@@ -1613,7 +1594,20 @@ function hookChatEvents() {
     // Inject Char Config button into action bar
     injectCharConfigButton();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.5`);
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.6`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
     console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
+
+    // --- Initial proactive session setup (for the chat that's open on page load) ---
+    const settings = getSettings();
+    if (settings.enabled) {
+        // Small delay to let ST finish loading the initial chat
+        setTimeout(async () => {
+            try {
+                await proactiveChatChanged();
+            } catch (e) {
+                console.warn(`[${EXTENSION_NAME}] Initial proactive setup failed:`, e.message);
+            }
+        }, 2000);
+    }
 })();
