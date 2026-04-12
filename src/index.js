@@ -2,8 +2,8 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.4 — Group chat deep exploration: ST server API (/api/groups), character scanning,
-//          page URL/DOM analysis, safe value summarization, async debug tests.
+// v2.5 — Focused group debug: Scan Chars (fixed), Message Names, ST API probe.
+//          Removed non-useful buttons. Fixed non-ASCII variable crash.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -346,30 +346,15 @@ function buildDebugPanelHTML() {
     <div class="ass-debug-panel" style="border:1px solid rgba(255,255,0,0.3); border-radius:6px; padding:8px; margin-top:8px; background:rgba(0,0,0,0.15);">
         <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
             <i class="fa-solid fa-bug" style="color:#f0ad4e;"></i>
-            <small><b>Debug Panel — Context API Explorer</b></small>
+            <small><b>Debug Panel</b></small>
         </div>
-        <!-- Row 1: Basics -->
         <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
+            <button class="ass-dbg-btn menu_button" data-test="scanCharsForGroups" style="border-color:rgba(255,165,0,0.5);" title="Search all chars for is_group=true + member lists">Scan Chars for Groups</button>
+            <button class="ass-dbg-btn menu_button" data-test="messageNames" style="border-color:rgba(255,165,0,0.5);" title="Parse participant names from chat messages">Message Names</button>
+            <button class="ass-dbg-btn menu_button" data-test="stApiChats" title="Fetch /api/chats from ST server">ST API: /api/chats</button>
             <button class="ass-dbg-btn menu_button" data-test="chatId">Chat ID</button>
-            <button class="ass-dbg-btn menu_button" data-test="names">name1/name2</button>
-            <button class="ass-dbg-btn menu_button" data-test="chatMetadata">Chat Metadata</button>
-            <button class="ass-dbg-btn menu_button" data-test="mainApi">mainApi</button>
-            <button class="ass-dbg-btn menu_button" data-test="chatCompletion">chatCompletion</button>
-        </div>
-        <!-- Row 2: Group Chat (the important row) -->
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
-            <button class="ass-dbg-btn menu_button" data-test="stApiGroups" style="border-color:rgba(255,165,0,0.5);" title="Fetch groups from ST's server API">ST API: /api/groups</button>
-            <button class="ass-dbg-btn menu_button" data-test="scanCharsForGroups" title="Search all 64 chars for is_group=true">Scan Chars for Groups</button>
-            <button class="ass-dbg-btn menu_button" data-test="pageUrlInfo">Page URL</button>
-            <button class="ass-dbg-btn menu_button" data-test="groupScan">Group Scan (old)</button>
-            <button class="ass-dbg-btn menu_button" data-test="groupFunctions">Group Functions</button>
-        </div>
-        <!-- Row 3: Advanced -->
-        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
-            <button class="ass-dbg-btn menu_button" data-test="contextChat">context.chat (msgs)</button>
-            <button class="ass-dbg-btn menu_button" data-test="characters">Characters (64)</button>
-            <button class="ass-dbg-btn menu_button" data-test="eventTypes">Event Types</button>
-            <button class="ass-dbg-btn menu_button" data-test="fullDump" style="border-color:rgba(217,83,79,0.5);">Full Dump (F12)</button>
+            <button class="ass-dbg-btn menu_button" data-test="contextChat">Chat Msgs</button>
+            <button class="ass-dbg-btn menu_button" data-test="fullDump" style="border-color:rgba(217,83,79,0.5);" title="Logs everything to F12">F12 Dump</button>
         </div>
         <div id="ass-dbg-output" style="margin-top:6px; display:none;">
             <pre id="ass-dbg-output-text" style="
@@ -427,94 +412,17 @@ async function runDebugTest(testName) {
     outputText.text('Loading...');
 
     let result = '';
-    let label = testName;
 
     try {
         switch (testName) {
-            // ---- Row 1: Basics ----
-            case 'chatId': {
-                const chatId = typeof context.getCurrentChatId === 'function'
-                    ? context.getCurrentChatId()
-                    : 'getCurrentChatId not available';
-                result = `Chat ID: ${JSON.stringify(chatId)} (type: ${typeof chatId})`;
-                break;
-            }
-            case 'names': {
-                result = `name1 (User): ${JSON.stringify(context.name1)}\nname2 (Char/Group): ${JSON.stringify(context.name2)}`;
-                break;
-            }
-            case 'chatMetadata': {
-                result = `chatMetadata: ${JSON.stringify(context.chatMetadata, null, 2)}`;
-                break;
-            }
-            case 'mainApi': {
-                result = `mainApi: ${JSON.stringify(context.mainApi)}\nonlineStatus: ${JSON.stringify(context.onlineStatus)}`;
-                break;
-            }
-            case 'chatCompletion': {
-                const cc = context.chatCompletionSettings || {};
-                result = `chatCompletionSettings:\n  custom_url: ${JSON.stringify(cc.custom_url)}\n  model: ${JSON.stringify(cc.model)}\n  (full object logged to F12)`;
-                console.log(`[${EXTENSION_NAME}] chatCompletionSettings:`, cc);
-                break;
-            }
-
-            // ---- Row 2: Group Chat ----
-            case 'stApiGroups': {
-                // Fetch groups directly from ST's server API
-                result = `Fetching /api/groups from ST server...`;
-                outputText.text(result);
-                try {
-                    const resp = await fetch('/api/groups');
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        // data might be an array or object with a groups property
-                        let groups = Array.isArray(data) ? data : (data.groups || data);
-                        const count = Array.isArray(groups) ? groups.length : 'N/A';
-                        result = `=== ST /api/groups ===\n`;
-                        result += `Total groups: ${count}\n\n`;
-
-                        if (Array.isArray(groups) && groups.length > 0) {
-                            // Show each group's name, id, members
-                            for (let i = 0; i < Math.min(groups.length, 10); i++) {
-                                const g = groups[i];
-                                const gName = g.name || g.chat_name || '(unnamed)';
-                                const gId = g.id || g.chat_id || g.group_id || '(no id)';
-                                const members = g.members || g.group_members || [];
-                                const memberCount = Array.isArray(members) ? members.length : (typeof members === 'object' ? Object.keys(members).length : '?');
-                                const isGroup = g.is_group || g.isGroup || false;
-                                result += `--- Group ${i + 1}: "${gName}" ---\n`;
-                                result += `  id: ${JSON.stringify(gId)}\n`;
-                                result += `  is_group: ${isGroup}\n`;
-                                result += `  members: ${memberCount}\n`;
-                                if (Array.isArray(members) && members.length > 0) {
-                                    result += `  member names: ${JSON.stringify(members.slice(0, 8).map(m => m.name || m.avatar || m))}\n`;
-                                }
-                                // Show all keys for first group
-                                if (i === 0) {
-                                    result += `  all keys: [${Object.keys(g).join(', ')}]\n`;
-                                }
-                                result += `\n`;
-                            }
-                        }
-
-                        console.log(`[${EXTENSION_NAME}] /api/groups response:`, groups);
-                    } else {
-                        result = `ERROR: /api/groups returned ${resp.status} ${resp.statusText}`;
-                    }
-                } catch (err) {
-                    result = `ERROR fetching /api/groups: ${err.message}`;
-                }
-                break;
-            }
             case 'scanCharsForGroups': {
-                // Search context.characters for entries that look like groups
                 const chars = context.characters;
                 if (!Array.isArray(chars)) {
                     result = `context.characters is not an array: ${typeof chars}`;
                     break;
                 }
                 const groupChars = [];
-                const可疑 = []; // potential groups by name patterns
+                let suspects = [];
 
                 for (let i = 0; i < chars.length; i++) {
                     const c = chars[i];
@@ -538,7 +446,7 @@ async function runDebugTest(testName) {
                     // Also flag chars with 'group' in name
                     const name = (c.name || '').toLowerCase();
                     if (name.includes('group') || name.includes('party') || name.includes('team')) {
-                        可疑.push({ index: i, name: c.name, allKeys: Object.keys(c) });
+                        suspects.push({ index: i, name: c.name, allKeys: Object.keys(c) });
                     }
                 }
 
@@ -557,158 +465,177 @@ async function runDebugTest(testName) {
                     result += `  (none found)\n`;
                 }
 
-                if (可疑.length > 0) {
+                if (suspects.length > 0) {
                     result += `\n\nPossible groups by name:\n`;
-                    for (const s of 可疑) {
+                    for (const s of suspects) {
                         result += `  "${s.name}" (index ${s.index}) keys: [${s.allKeys.join(', ')}]\n`;
                     }
                 }
 
-                // Also show structure of first character so we know what fields exist
+                // Show structure of first character for reference
                 if (chars.length > 0) {
-                    result += `\n\nSample character[0] keys: [${Object.keys(chars[0]).join(', ')}]`;
+                    result += `\n\n--- Sample: character[0] ---\n`;
+                    result += `  keys: [${Object.keys(chars[0]).join(', ')}]\n`;
                     const c0 = chars[0];
-                    // Check if characters have chat/visible_chats properties
-                    result += `\ncharacter[0].chat type: ${typeof c0.chat} ${Array.isArray(c0.chat) ? '(array[' + c0.chat.length + '])' : ''}`;
-                    result += `\ncharacter[0].data keys: ${c0.data ? Object.keys(c0.data).join(', ') : '(no data)'}`;
+                    result += `  is_group: ${c0.is_group || c0.isGroup}\n`;
+                    result += `  name: ${c0.name}\n`;
+                    if (c0.data) {
+                        result += `  data keys: [${Object.keys(c0.data).join(', ')}]\n`;
+                    }
+                    if (Array.isArray(c0.chat)) {
+                        result += `  chat: array[${c0.chat.length}] (chat histories for this char)\n`;
+                    }
+                    if (Array.isArray(c0.visible_chats)) {
+                        result += `  visible_chats: array[${c0.visible_chats.length}]\n`;
+                    }
                 }
 
                 console.log(`[${EXTENSION_NAME}] Group chars found:`, groupChars);
-                console.log(`[${EXTENSION_NAME}] All chars sample:`, chars[0]);
-                break;
-            }
-            case 'pageUrlInfo': {
-                const url = window.location.href;
-                const origin = window.location.origin;
-                const path = window.location.pathname;
-                const hash = window.location.hash;
-                result = `=== Page URL ===\n`;
-                result += `Full URL: ${url}\n`;
-                result += `Origin: ${origin}\n`;
-                result += `Path: ${path}\n`;
-                result += `Hash: ${hash}\n\n`;
-                // Check for group/chat params in URL
-                const urlObj = new URL(url);
-                const params = Object.fromEntries(urlObj.searchParams);
-                result += `Query params: ${JSON.stringify(params)}\n\n`;
-                // Also check DOM for hidden group state
-                const $charName = $('#character_name_pole');
-                const $groupName = $('#group_name_pole');
-                const $rmInfo = $('#right-nav-panel');
-                result += `DOM checks:\n`;
-                result += `  #character_name_pole: ${$charName.length ? $charName.text().trim() : '(not found)'}\n`;
-                result += `  #group_name_pole: ${$groupName.length ? $groupName.text().trim() : '(not found)'}\n`;
-                result += `  body classes: ${document.body.className}\n`;
-                // Check for data attributes on body or chat container
-                const $body = $('body');
-                result += `  body data-attr keys: [${Array.from($body[0]?.dataset || {}).join(', ')}]\n`;
-                break;
-            }
-            case 'groupScan': {
-                // Legacy scan — kept for reference
-                const paths = [
-                    'groupId', 'isGroup', 'groups', 'group', 'activeGroup',
-                    'chat?.group_id', 'chat?.is_group',
-                    'character?.is_group', 'character?.members',
-                    'chatMetadata?.group_id', 'chatMetadata?.members',
-                ];
-                const lines = [];
-                for (const p of paths) {
-                    try {
-                        const val = p.split('?.').reduce((obj, key) => {
-                            if (obj === null || obj === undefined) return undefined;
-                            return obj[key];
-                        }, context);
-                        lines.push(`context.${p} = ${safeSummarize(val)}`);
-                    } catch (e) {
-                        lines.push(`context.${p} = ERROR`);
-                    }
-                }
-                result = `=== Context Group Paths ===\n${lines.join('\n')}`;
-                break;
-            }
-            case 'groupFunctions': {
-                const allKeys = Object.keys(context);
-                const groupFns = allKeys.filter(k => {
-                    const lk = k.toLowerCase();
-                    return lk.includes('group') || lk.includes('member');
-                });
-                const fnList = [];
-                const varList = [];
-                for (const k of groupFns) {
-                    const val = context[k];
-                    const type = typeof val;
-                    if (type === 'function') {
-                        fnList.push(k);
-                    } else {
-                        varList.push(`${k}: ${safeSummarize(val, 1)}`);
-                    }
-                }
-                result = `=== Group/Member on context (${groupFns.length} matches) ===\n`;
-                result += `\nFunctions:\n${fnList.map(f => `  ${f}()`).join('\n') || '  (none)'}`;
-                result += `\n\nVariables:\n${varList.map(v => `  ${v}`).join('\n') || '  (none)'}`;
+                console.log(`[${EXTENSION_NAME}] chars[0] sample:`, chars[0]);
                 break;
             }
 
-            // ---- Row 3: Advanced ----
+            case 'messageNames': {
+                // Parse context.chat messages to find all participant names
+                const msgs = context.chat;
+                if (!Array.isArray(msgs)) {
+                    result = `context.chat is not an array: ${typeof msgs}`;
+                    break;
+                }
+                result = `=== Message Names from ${msgs.length} messages ===\n\n`;
+
+                const nameSet = new Set();
+                const nameDetails = [];
+
+                for (let i = 0; i < msgs.length; i++) {
+                    const m = msgs[i];
+                    // ST messages use 'name' for character name, 'is_user' for user messages
+                    const isUser = m.is_user || m.is_system || false;
+                    const name = m.name || (isUser ? '(user)' : '(unnamed)');
+                    const content = (m.mes || m.content || '').substring(0, 60);
+                    const genId = m.gen_id || m.gen_started_by || '';
+                    const swipeId = m.swipe_id || m.swipe_info || '';
+
+                    nameSet.add(name);
+                    nameDetails.push({
+                        idx: i,
+                        name: name,
+                        isUser: isUser,
+                        genId: genId,
+                        swipeId: swipeId,
+                        preview: content,
+                        keys: Object.keys(m).filter(k => !['mes', 'content', 'name'].includes(k)),
+                    });
+
+                    result += `[${i}] ${isUser ? 'USER' : 'CHAR'}: "${name}"\n`;
+                    if (genId) result += `     gen_started_by: ${JSON.stringify(genId)}\n`;
+                    if (swipeId) result += `     swipe_info: ${JSON.stringify(swipeId)}\n`;
+                    result += `     extra keys: [${Object.keys(m).filter(k => !['mes', 'content', 'name', 'is_user', 'is_system', 'gen_id', 'gen_started_by', 'swipe_id', 'swipe_info', 'send_date', 'extra'].includes(k)).join(', ')}]\n\n`;
+                }
+
+                result += `=== Unique names (${nameSet.size}) ===\n`;
+                for (const n of nameSet) {
+                    result += `  "${n}"\n`;
+                }
+
+                // Also show keys from the last message (most complete)
+                if (msgs.length > 0) {
+                    const lastMsg = msgs[msgs.length - 1];
+                    result += `\n=== Last message keys (${Object.keys(lastMsg).length}) ===\n`;
+                    result += `[${Object.keys(lastMsg).join(', ')}]\n`;
+                }
+
+                console.log(`[${EXTENSION_NAME}] All name details:`, nameDetails);
+                break;
+            }
+
+            case 'stApiChats': {
+                result = `Fetching /api/chats...`;
+                outputText.text(result);
+                try {
+                    const resp = await fetch('/api/chats');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        result = `=== /api/chats response ===\n`;
+                        result += `type: ${typeof data}, array: ${Array.isArray(data)}\n`;
+                        if (Array.isArray(data)) {
+                            result += `count: ${data.length}\n\n`;
+                            for (let i = 0; i < Math.min(data.length, 5); i++) {
+                                const item = data[i];
+                                result += `--- chat[${i}] ---\n`;
+                                result += `keys: [${Object.keys(item).join(', ')}]\n`;
+                                result += `chat_id: ${JSON.stringify(item.chat_id || item.chat)}\n`;
+                                result += `character_name: ${JSON.stringify(item.character_name || item.character)}\n`;
+                                result += `\n`;
+                            }
+                        } else if (typeof data === 'object') {
+                            result += `keys: [${Object.keys(data).join(', ')}]\n`;
+                            result += `value: ${JSON.stringify(data).substring(0, 1500)}`;
+                        }
+                        console.log(`[${EXTENSION_NAME}] /api/chats:`, data);
+                    } else {
+                        result = `/api/chats returned ${resp.status}. Trying other endpoints...`;
+                        outputText.text(result);
+                        // Try alternatives
+                        const altEndpoints = [
+                            '/api/groups/all',
+                            '/api/characters/groups',
+                            '/api/group',
+                            '/api/character/list',
+                        ];
+                        for (const ep of altEndpoints) {
+                            try {
+                                const r = await fetch(ep);
+                                const status = r.status;
+                                result += `\n${ep} → ${status}`;
+                                if (status === 200) {
+                                    const d = await r.json();
+                                    result += ` ${typeof d} ${Array.isArray(d) ? '(arr[' + d.length + '])' : ''}`;
+                                    console.log(`[${EXTENSION_NAME}] ${ep}:`, d);
+                                }
+                            } catch (e) {
+                                result += `\n${ep} → ERROR: ${e.message}`;
+                            }
+                        }
+                    }
+                } catch (err) {
+                    result = `ERROR: ${err.message}`;
+                }
+                break;
+            }
+
+            case 'chatId': {
+                const chatId = typeof context.getCurrentChatId === 'function'
+                    ? context.getCurrentChatId()
+                    : 'N/A';
+                result = `Chat ID: ${JSON.stringify(chatId)}`;
+                result += `\nname1 (persona): ${JSON.stringify(context.name1)}`;
+                result += `\nname2 (char/group): ${JSON.stringify(context.name2)}`;
+                result += `\ngroupId: ${JSON.stringify(context.groupId)}`;
+                break;
+            }
+
             case 'contextChat': {
                 const chat = context.chat;
                 if (Array.isArray(chat)) {
-                    result = `context.chat is array[${chat.length}] (chat messages)\n\n`;
-                    // Show first 2 messages summary
-                    for (let i = 0; i < Math.min(chat.length, 3); i++) {
+                    result = `context.chat: array[${chat.length}] (messages)\n\n`;
+                    for (let i = 0; i < chat.length; i++) {
                         const m = chat[i];
-                        const keys = m ? Object.keys(m) : [];
-                        const role = m?.role || m?.is_user !== undefined ? (m.is_user ? 'user' : 'assistant') : '?';
-                        const content = m?.mes || m?.content || '';
-                        const preview = String(content).substring(0, 80);
-                        result += `msg[${i}]: role=${role} keys=[${keys.join(',')}] "${preview}..."\n`;
+                        const name = m.name || '?';
+                        const isUser = m.is_user ? 'USER' : 'CHAR';
+                        const content = (m.mes || m.content || '').substring(0, 100);
+                        result += `[${i}] ${isUser} "${name}": "${content}..."\n`;
                     }
-                    console.log(`[${EXTENSION_NAME}] context.chat (messages):`, chat);
-                } else if (chat && typeof chat === 'object') {
-                    result = `context.chat keys (${Object.keys(chat).length}):\n${JSON.stringify(chat, null, 2).substring(0, 1500)}`;
+                    if (chat.length > 0) {
+                        result += `\nmsg[0] keys: [${Object.keys(chat[0]).join(', ')}]`;
+                    }
                 } else {
                     result = `context.chat: ${safeSummarize(chat)}`;
                 }
+                console.log(`[${EXTENSION_NAME}] context.chat:`, chat);
                 break;
             }
-            case 'characters': {
-                const chars = context.characters;
-                const count = Array.isArray(chars) ? chars.length : 'N/A';
-                result = `characters: ${count}\n\n`;
-                if (Array.isArray(chars) && chars.length > 0) {
-                    result += `First 5 names:\n`;
-                    for (let i = 0; i < Math.min(5, chars.length); i++) {
-                        result += `  [${i}] ${chars[i].name || chars[i].avatar || '(unnamed)'}\n`;
-                    }
-                    result += `\ncharacter[0] keys: [${Object.keys(chars[0]).join(', ')}]`;
-                }
-                break;
-            }
-            case 'eventTypes': {
-                const ev = context.eventTypes || context.event_types;
-                if (ev) {
-                    const keys = Object.keys(ev);
-                    const isArr = Array.isArray(ev);
-                    if (isArr) {
-                        result = `eventTypes (array[${ev.length}]):\n${ev.join(', ')}`;
-                    } else {
-                        result = `eventTypes (object{${keys.length}}):\n${keys.join('\n')}`;
-                    }
-                    // Filter for group-related events
-                    const groupEvents = keys.filter(k => {
-                        const lk = k.toLowerCase();
-                        return lk.includes('group') || lk.includes('member') || lk.includes('chat');
-                    });
-                    if (groupEvents.length > 0) {
-                        result += `\n\nGroup/Chat events (${groupEvents.length}):\n${groupEvents.join('\n')}`;
-                    }
-                    console.log(`[${EXTENSION_NAME}] eventTypes raw:`, ev);
-                } else {
-                    result = 'eventTypes not found.';
-                }
-                break;
-            }
+
             case 'fullDump': {
                 console.log(`[${EXTENSION_NAME}] ========== FULL CONTEXT DUMP ==========`);
                 const summary = {};
@@ -725,11 +652,12 @@ async function runDebugTest(testName) {
                         summary[key] = `${type}: ${JSON.stringify(val)}`;
                     }
                 }
-                console.log(`[${EXTENSION_NAME}] Context summary:`, summary);
-                console.log(`[${EXTENSION_NAME}] Full context object:`, context);
-                result = `Full dump logged to F12 console.\n\nKeys (${Object.keys(context).length} total):\n${JSON.stringify(summary, null, 2)}`;
+                console.log(`[${EXTENSION_NAME}] Summary:`, summary);
+                console.log(`[${EXTENSION_NAME}] Full:`, context);
+                result = `Logged to F12.\n\n${JSON.stringify(summary, null, 2)}`;
                 break;
             }
+
             default:
                 result = `Unknown test: ${testName}`;
         }
@@ -738,7 +666,7 @@ async function runDebugTest(testName) {
     }
 
     outputText.text(result);
-    console.log(`[${EXTENSION_NAME}] [Debug] ${label}:\n${result}`);
+    console.log(`[${EXTENSION_NAME}] [Debug] ${testName}:\n${result}`);
 }
 
 // #############################################
@@ -1562,7 +1490,7 @@ function hookChatEvents() {
     // Inject Char Config button into action bar
     injectCharConfigButton();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.4`);
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.5`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
     console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
 })();
