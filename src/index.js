@@ -2,8 +2,9 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.5 — Focused group debug: Scan Chars (fixed), Message Names, ST API probe.
-//          Removed non-useful buttons. Fixed non-ASCII variable crash.
+// v2.5 — Group data breakthrough: POST /api/groups/all with proper ST auth headers.
+//          Finds active group by chat_id match, resolves members to character objects.
+//          Removed all non-helpful debug buttons.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -72,6 +73,12 @@ let agentConnected = false;        // Current connection state
 let healthCheckTimer = null;       // Interval timer for health checks
 let isReconnecting = false;        // Prevents spam-clicking reconnect
 
+// Group data (populated by loadGroupData)
+let cachedGroups = null;           // All groups from /api/groups/all
+let activeGroup = null;            // The currently active group object (with resolved members)
+let activeGroupCharacters = [];    // Full Character objects for active group members
+let isGroupChat = false;           // Whether the current chat is a group chat
+
 // #############################################
 // # 3. Agent URL Resolution (Auto-Detect)
 // #############################################
@@ -79,10 +86,9 @@ let isReconnecting = false;        // Prevents spam-clicking reconnect
 /**
  * Resolve the Agent URL from SillyTavern's Custom Endpoint setting.
  * Falls back to parsing the request URL at interception time.
- * No manual override — the user configures the URL in ST's API connection panel.
+ * No manual override - the user configures the URL in ST's API connection panel.
  */
 function getAgentOrigin() {
-    // 1. Read from ST's Custom Endpoint URL
     try {
         const customUrl = context.chatCompletionSettings?.custom_url;
         if (customUrl) {
@@ -102,7 +108,6 @@ function resolveBackendOrigin(requestUrl) {
     const fromST = getAgentOrigin();
     if (fromST) return fromST;
 
-    // Fallback: extract from the request URL
     try {
         const urlObj = new URL(requestUrl);
         return urlObj.origin;
@@ -149,7 +154,7 @@ async function syncConfigToAgent(settings) {
 
     const origin = getAgentOrigin();
     if (!origin) {
-        console.warn(`[${EXTENSION_NAME}] Cannot sync config — no Agent URL available yet. Will sync on first request.`);
+        console.warn(`[${EXTENSION_NAME}] Cannot sync config - no Agent URL available yet. Will sync on first request.`);
         return;
     }
 
@@ -217,7 +222,7 @@ async function checkAgentHealth() {
         if (resp.ok) {
             const data = await resp.json().catch(() => ({}));
             const sessionCount = data.sessions || 0;
-            setConnectionStatus(true, `Connected — ${sessionCount} session(s)`);
+            setConnectionStatus(true, `Connected - ${sessionCount} session(s)`);
 
             // Also ping the dashboard so the ST Extension light stays green
             pingAgent(url);
@@ -238,7 +243,7 @@ async function checkAgentHealth() {
 }
 
 /**
- * POST /api/ping — lights the "ST Extension" indicator on the dashboard.
+ * POST /api/ping - lights the "ST Extension" indicator on the dashboard.
  */
 async function pingAgent(healthUrl) {
     const origin = getAgentOrigin();
@@ -246,7 +251,7 @@ async function pingAgent(healthUrl) {
     try {
         await fetch(`${origin}/api/ping`, { method: 'POST' });
     } catch (e) {
-        // Silent — best-effort
+        // Silent - best-effort
     }
 }
 
@@ -306,7 +311,7 @@ async function handleReconnect() {
         const url = getHealthCheckUrl();
 
         if (!url) {
-            setConnectionStatus(false, 'No Agent URL — set Custom Endpoint in ST');
+            setConnectionStatus(false, 'No Agent URL - set Custom Endpoint in ST');
             toastr.warning('Set a Custom Endpoint URL in SillyTavern\'s API connection settings.', 'Agent-StateSync');
             return;
         }
@@ -335,11 +340,159 @@ async function handleReconnect() {
 }
 
 // #############################################
-// # 6. Debug Panel — Context API Exploration
+// # 6. Group Data Loading
 // #############################################
 
 /**
- * Build the debug panel HTML with exploration buttons.
+ * Fetch all groups from ST's server API using proper auth headers.
+ * ST's getGroups() uses POST /api/groups/all with getRequestHeaders().
+ * The previous debug button got 404 because it called it as GET without auth.
+ *
+ * Returns the raw groups array from the server.
+ */
+async function fetchGroupsFromServer() {
+    // Use ST's own auth headers
+    let headers = {};
+    if (typeof context.getRequestHeaders === 'function') {
+        headers = context.getRequestHeaders({ omitContentType: true });
+    }
+
+    const resp = await fetch('/api/groups/all', {
+        method: 'POST',
+        headers: headers,
+    });
+
+    if (!resp.ok) {
+        throw new Error(`POST /api/groups/all returned ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Find the currently active group by matching chat_id against
+ * the current chat ID from ST's context.
+ *
+ * ST sets group.chat_id when opening a group chat (see openGroupChat in group-chats.js).
+ * getCurrentChatId() returns the active chat ID string.
+ */
+function findActiveGroup(groups) {
+    const currentChatId = typeof context.getCurrentChatId === 'function'
+        ? context.getCurrentChatId()
+        : null;
+
+    if (!currentChatId || !groups) return null;
+
+    // Direct match on chat_id
+    for (const group of groups) {
+        if (group.chat_id === currentChatId || group.id === currentChatId) {
+            return group;
+        }
+    }
+
+    // Also check if currentChatId is in the group's chats array
+    for (const group of groups) {
+        if (Array.isArray(group.chats) && group.chats.includes(currentChatId)) {
+            return group;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Resolve group member avatar strings to full Character objects.
+ * ST stores group members as avatar filenames (e.g. "Belle.png").
+ * We match them against context.characters[].avatar.
+ */
+function resolveGroupMemberCharacters(group) {
+    if (!group || !Array.isArray(group.members)) return [];
+
+    const allChars = context.characters || [];
+    const resolved = [];
+
+    for (const memberAvatar of group.members) {
+        const char = allChars.find(c => c.avatar === memberAvatar);
+        if (char) {
+            resolved.push(char);
+        } else {
+            // Fallback: try matching by name (some older formats store names instead of avatars)
+            const charByName = allChars.find(c => c.name === memberAvatar);
+            if (charByName) {
+                resolved.push(charByName);
+            } else {
+                // Store unresolved entry so we know it exists
+                resolved.push({
+                    avatar: memberAvatar,
+                    name: memberAvatar.replace(/\.[^.]+$/, ''), // strip extension for display
+                    _unresolved: true,
+                });
+            }
+        }
+    }
+
+    return resolved;
+}
+
+/**
+ * Main function: Load group data from ST's server, find active group,
+ * resolve member characters, and cache everything for the interceptor.
+ *
+ * Returns { groups, activeGroup, members, isGroupChat }
+ */
+async function loadGroupData() {
+    cachedGroups = null;
+    activeGroup = null;
+    activeGroupCharacters = [];
+    isGroupChat = false;
+
+    const groups = await fetchGroupsFromServer();
+    cachedGroups = groups;
+
+    console.log(`[${EXTENSION_NAME}] Loaded ${groups.length} groups from server`);
+
+    const found = findActiveGroup(groups);
+
+    if (found) {
+        activeGroup = found;
+        isGroupChat = true;
+        activeGroupCharacters = resolveGroupMemberCharacters(found);
+
+        console.log(`[${EXTENSION_NAME}] Active group: "${found.name}" (id=${found.id}, chat_id=${found.chat_id})`);
+        console.log(`[${EXTENSION_NAME}] Members (${activeGroupCharacters.length}):`,
+            activeGroupCharacters.map(c => c.name || c.avatar).join(', ')
+        );
+
+        // Try to unshallow group members for full card data
+        if (typeof context.unshallowGroupMembers === 'function' && found.id) {
+            try {
+                await context.unshallowGroupMembers(found.id);
+                console.log(`[${EXTENSION_NAME}] Called unshallowGroupMembers(${found.id})`);
+            } catch (e) {
+                console.warn(`[${EXTENSION_NAME}] unshallowGroupMembers failed:`, e.message);
+            }
+        }
+    } else {
+        console.log(`[${EXTENSION_NAME}] No active group found for current chat. Single-character mode.`);
+    }
+
+    return {
+        groups: groups,
+        activeGroup: activeGroup,
+        members: activeGroupCharacters,
+        isGroupChat: isGroupChat,
+    };
+}
+
+// #############################################
+// # 7. Debug Panel (Focused)
+// #############################################
+
+/**
+ * Build the debug panel with only useful buttons.
+ * - "Load Group Data": POST /api/groups/all with auth, find active group, resolve members
+ * - "F12 Dump": Emergency full context dump
  */
 function buildDebugPanelHTML() {
     return `
@@ -349,12 +502,12 @@ function buildDebugPanelHTML() {
             <small><b>Debug Panel</b></small>
         </div>
         <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
-            <button class="ass-dbg-btn menu_button" data-test="scanCharsForGroups" style="border-color:rgba(255,165,0,0.5);" title="Search all chars for is_group=true + member lists">Scan Chars for Groups</button>
-            <button class="ass-dbg-btn menu_button" data-test="messageNames" style="border-color:rgba(255,165,0,0.5);" title="Parse participant names from chat messages">Message Names</button>
-            <button class="ass-dbg-btn menu_button" data-test="stApiChats" title="Fetch /api/chats from ST server">ST API: /api/chats</button>
-            <button class="ass-dbg-btn menu_button" data-test="chatId">Chat ID</button>
-            <button class="ass-dbg-btn menu_button" data-test="contextChat">Chat Msgs</button>
-            <button class="ass-dbg-btn menu_button" data-test="fullDump" style="border-color:rgba(217,83,79,0.5);" title="Logs everything to F12">F12 Dump</button>
+            <button class="ass-dbg-btn menu_button" data-test="loadGroupData" style="border-color:rgba(92,184,92,0.5);" title="Fetch groups from ST server with auth, find active group, resolve members">
+                <i class="fa-solid fa-users"></i> Load Group Data
+            </button>
+            <button class="ass-dbg-btn menu_button" data-test="fullDump" style="border-color:rgba(217,83,79,0.5);" title="Logs everything to F12 console">
+                <i class="fa-solid fa-terminal"></i> F12 Dump
+            </button>
         </div>
         <div id="ass-dbg-output" style="margin-top:6px; display:none;">
             <pre id="ass-dbg-output-text" style="
@@ -366,7 +519,7 @@ function buildDebugPanelHTML() {
                 color: #5cb85c;
                 white-space: pre-wrap;
                 word-break: break-all;
-                max-height: 300px;
+                max-height: 400px;
                 overflow-y: auto;
                 margin: 0;
             "></pre>
@@ -415,224 +568,114 @@ async function runDebugTest(testName) {
 
     try {
         switch (testName) {
-            case 'scanCharsForGroups': {
-                const chars = context.characters;
-                if (!Array.isArray(chars)) {
-                    result = `context.characters is not an array: ${typeof chars}`;
-                    break;
-                }
-                const groupChars = [];
-                let suspects = [];
-
-                for (let i = 0; i < chars.length; i++) {
-                    const c = chars[i];
-                    const isGroup = c.is_group || c.isGroup || false;
-                    const hasMembers = Array.isArray(c.members) || Array.isArray(c.group_members);
-                    const memberCount = hasMembers
-                        ? (Array.isArray(c.members) ? c.members.length : c.group_members.length)
-                        : 0;
-
-                    if (isGroup || hasMembers) {
-                        groupChars.push({
-                            index: i,
-                            name: c.name || c.avatar || '(unnamed)',
-                            id: c.id || c.chat_id || c.group_id,
-                            is_group: isGroup,
-                            memberCount: memberCount,
-                            allKeys: Object.keys(c),
-                        });
-                    }
-
-                    // Also flag chars with 'group' in name
-                    const name = (c.name || '').toLowerCase();
-                    if (name.includes('group') || name.includes('party') || name.includes('team')) {
-                        suspects.push({ index: i, name: c.name, allKeys: Object.keys(c) });
-                    }
-                }
-
-                result = `=== Scanning ${chars.length} characters for groups ===\n\n`;
-                result += `Found ${groupChars.length} with is_group=true or members:\n`;
-
-                if (groupChars.length > 0) {
-                    for (const g of groupChars) {
-                        result += `\n--- "${g.name}" (index ${g.index}) ---\n`;
-                        result += `  is_group: ${g.is_group}\n`;
-                        result += `  memberCount: ${g.memberCount}\n`;
-                        result += `  id: ${JSON.stringify(g.id)}\n`;
-                        result += `  all keys: [${g.allKeys.join(', ')}]\n`;
-                    }
-                } else {
-                    result += `  (none found)\n`;
-                }
-
-                if (suspects.length > 0) {
-                    result += `\n\nPossible groups by name:\n`;
-                    for (const s of suspects) {
-                        result += `  "${s.name}" (index ${s.index}) keys: [${s.allKeys.join(', ')}]\n`;
-                    }
-                }
-
-                // Show structure of first character for reference
-                if (chars.length > 0) {
-                    result += `\n\n--- Sample: character[0] ---\n`;
-                    result += `  keys: [${Object.keys(chars[0]).join(', ')}]\n`;
-                    const c0 = chars[0];
-                    result += `  is_group: ${c0.is_group || c0.isGroup}\n`;
-                    result += `  name: ${c0.name}\n`;
-                    if (c0.data) {
-                        result += `  data keys: [${Object.keys(c0.data).join(', ')}]\n`;
-                    }
-                    if (Array.isArray(c0.chat)) {
-                        result += `  chat: array[${c0.chat.length}] (chat histories for this char)\n`;
-                    }
-                    if (Array.isArray(c0.visible_chats)) {
-                        result += `  visible_chats: array[${c0.visible_chats.length}]\n`;
-                    }
-                }
-
-                console.log(`[${EXTENSION_NAME}] Group chars found:`, groupChars);
-                console.log(`[${EXTENSION_NAME}] chars[0] sample:`, chars[0]);
-                break;
-            }
-
-            case 'messageNames': {
-                // Parse context.chat messages to find all participant names
-                const msgs = context.chat;
-                if (!Array.isArray(msgs)) {
-                    result = `context.chat is not an array: ${typeof msgs}`;
-                    break;
-                }
-                result = `=== Message Names from ${msgs.length} messages ===\n\n`;
-
-                const nameSet = new Set();
-                const nameDetails = [];
-
-                for (let i = 0; i < msgs.length; i++) {
-                    const m = msgs[i];
-                    // ST messages use 'name' for character name, 'is_user' for user messages
-                    const isUser = m.is_user || m.is_system || false;
-                    const name = m.name || (isUser ? '(user)' : '(unnamed)');
-                    const content = (m.mes || m.content || '').substring(0, 60);
-                    const genId = m.gen_id || m.gen_started_by || '';
-                    const swipeId = m.swipe_id || m.swipe_info || '';
-
-                    nameSet.add(name);
-                    nameDetails.push({
-                        idx: i,
-                        name: name,
-                        isUser: isUser,
-                        genId: genId,
-                        swipeId: swipeId,
-                        preview: content,
-                        keys: Object.keys(m).filter(k => !['mes', 'content', 'name'].includes(k)),
-                    });
-
-                    result += `[${i}] ${isUser ? 'USER' : 'CHAR'}: "${name}"\n`;
-                    if (genId) result += `     gen_started_by: ${JSON.stringify(genId)}\n`;
-                    if (swipeId) result += `     swipe_info: ${JSON.stringify(swipeId)}\n`;
-                    result += `     extra keys: [${Object.keys(m).filter(k => !['mes', 'content', 'name', 'is_user', 'is_system', 'gen_id', 'gen_started_by', 'swipe_id', 'swipe_info', 'send_date', 'extra'].includes(k)).join(', ')}]\n\n`;
-                }
-
-                result += `=== Unique names (${nameSet.size}) ===\n`;
-                for (const n of nameSet) {
-                    result += `  "${n}"\n`;
-                }
-
-                // Also show keys from the last message (most complete)
-                if (msgs.length > 0) {
-                    const lastMsg = msgs[msgs.length - 1];
-                    result += `\n=== Last message keys (${Object.keys(lastMsg).length}) ===\n`;
-                    result += `[${Object.keys(lastMsg).join(', ')}]\n`;
-                }
-
-                console.log(`[${EXTENSION_NAME}] All name details:`, nameDetails);
-                break;
-            }
-
-            case 'stApiChats': {
-                result = `Fetching /api/chats...`;
-                outputText.text(result);
-                try {
-                    const resp = await fetch('/api/chats');
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        result = `=== /api/chats response ===\n`;
-                        result += `type: ${typeof data}, array: ${Array.isArray(data)}\n`;
-                        if (Array.isArray(data)) {
-                            result += `count: ${data.length}\n\n`;
-                            for (let i = 0; i < Math.min(data.length, 5); i++) {
-                                const item = data[i];
-                                result += `--- chat[${i}] ---\n`;
-                                result += `keys: [${Object.keys(item).join(', ')}]\n`;
-                                result += `chat_id: ${JSON.stringify(item.chat_id || item.chat)}\n`;
-                                result += `character_name: ${JSON.stringify(item.character_name || item.character)}\n`;
-                                result += `\n`;
-                            }
-                        } else if (typeof data === 'object') {
-                            result += `keys: [${Object.keys(data).join(', ')}]\n`;
-                            result += `value: ${JSON.stringify(data).substring(0, 1500)}`;
-                        }
-                        console.log(`[${EXTENSION_NAME}] /api/chats:`, data);
-                    } else {
-                        result = `/api/chats returned ${resp.status}. Trying other endpoints...`;
-                        outputText.text(result);
-                        // Try alternatives
-                        const altEndpoints = [
-                            '/api/groups/all',
-                            '/api/characters/groups',
-                            '/api/group',
-                            '/api/character/list',
-                        ];
-                        for (const ep of altEndpoints) {
-                            try {
-                                const r = await fetch(ep);
-                                const status = r.status;
-                                result += `\n${ep} → ${status}`;
-                                if (status === 200) {
-                                    const d = await r.json();
-                                    result += ` ${typeof d} ${Array.isArray(d) ? '(arr[' + d.length + '])' : ''}`;
-                                    console.log(`[${EXTENSION_NAME}] ${ep}:`, d);
-                                }
-                            } catch (e) {
-                                result += `\n${ep} → ERROR: ${e.message}`;
-                            }
-                        }
-                    }
-                } catch (err) {
-                    result = `ERROR: ${err.message}`;
-                }
-                break;
-            }
-
-            case 'chatId': {
-                const chatId = typeof context.getCurrentChatId === 'function'
+            case 'loadGroupData': {
+                // Step 1: Show current context info
+                const currentChatId = typeof context.getCurrentChatId === 'function'
                     ? context.getCurrentChatId()
-                    : 'N/A';
-                result = `Chat ID: ${JSON.stringify(chatId)}`;
-                result += `\nname1 (persona): ${JSON.stringify(context.name1)}`;
-                result += `\nname2 (char/group): ${JSON.stringify(context.name2)}`;
-                result += `\ngroupId: ${JSON.stringify(context.groupId)}`;
-                break;
-            }
+                    : null;
 
-            case 'contextChat': {
-                const chat = context.chat;
-                if (Array.isArray(chat)) {
-                    result = `context.chat: array[${chat.length}] (messages)\n\n`;
-                    for (let i = 0; i < chat.length; i++) {
-                        const m = chat[i];
-                        const name = m.name || '?';
-                        const isUser = m.is_user ? 'USER' : 'CHAR';
-                        const content = (m.mes || m.content || '').substring(0, 100);
-                        result += `[${i}] ${isUser} "${name}": "${content}..."\n`;
-                    }
-                    if (chat.length > 0) {
-                        result += `\nmsg[0] keys: [${Object.keys(chat[0]).join(', ')}]`;
-                    }
-                } else {
-                    result = `context.chat: ${safeSummarize(chat)}`;
+                result = `=== Group Data Loader ===\n\n`;
+                result += `Current chat ID: ${JSON.stringify(currentChatId)}\n`;
+                result += `name1 (persona): ${JSON.stringify(context.name1)}\n`;
+                result += `name2: ${JSON.stringify(context.name2)}\n`;
+                result += `context.character: ${context.character ? context.character.name : 'undefined'}\n`;
+                result += `context.characters: array[${(context.characters || []).length}]\n`;
+                result += `\n--- Fetching POST /api/groups/all ---\n`;
+                outputText.text(result);
+
+                // Step 2: Fetch groups with proper auth
+                const groups = await fetchGroupsFromServer();
+                cachedGroups = groups;
+
+                result += `Got ${groups.length} groups from server\n`;
+
+                if (groups.length === 0) {
+                    result += `\nNo groups found. You may not have any groups created.`;
+                    break;
                 }
-                console.log(`[${EXTENSION_NAME}] context.chat:`, chat);
+
+                // Step 3: Show all groups briefly
+                result += `\n--- All Groups ---\n`;
+                for (let i = 0; i < groups.length; i++) {
+                    const g = groups[i];
+                    const memberCount = Array.isArray(g.members) ? g.members.length : 0;
+                    const disabledCount = Array.isArray(g.disabled_members) ? g.disabled_members.length : 0;
+                    result += `[${i}] "${g.name}" (id=${g.id}, chat_id=${JSON.stringify(g.chat_id)}, members=${memberCount}`;
+                    if (disabledCount > 0) result += `, disabled=${disabledCount}`;
+                    result += `)\n`;
+                }
+                outputText.text(result);
+
+                // Step 4: Find active group
+                const found = findActiveGroup(groups);
+
+                if (found) {
+                    activeGroup = found;
+                    isGroupChat = true;
+
+                    result += `\n=== ACTIVE GROUP FOUND ===\n`;
+                    result += `Name: "${found.name}"\n`;
+                    result += `ID: ${found.id}\n`;
+                    result += `chat_id: ${JSON.stringify(found.chat_id)}\n`;
+                    result += `Activation: ${found.activation_strategy} (0=Natural,1=List,2=Manual,3=Pooled)\n`;
+                    result += `Generation: ${found.generation_mode} (0=Swap,1=Append,2=Append_Disabled)\n`;
+                    result += `Allow self responses: ${found.allow_self_responses}\n`;
+                    result += `Members (avatar IDs): [${(found.members || []).join(', ')}]\n`;
+                    if (Array.isArray(found.disabled_members) && found.disabled_members.length > 0) {
+                        result += `Disabled: [${found.disabled_members.join(', ')}]\n`;
+                    }
+                    result += `Fav: ${found.fav}\n`;
+
+                    // Step 5: Resolve members to character objects
+                    activeGroupCharacters = resolveGroupMemberCharacters(found);
+
+                    result += `\n--- Resolved Members (${activeGroupCharacters.length}) ---\n`;
+                    for (let i = 0; i < activeGroupCharacters.length; i++) {
+                        const c = activeGroupCharacters[i];
+                        const unresolved = c._unresolved ? ' [UNRESOLVED]' : '';
+                        result += `\n[${i}] "${c.name}"${unresolved}\n`;
+                        result += `    avatar: ${JSON.stringify(c.avatar)}\n`;
+                        if (c.description) {
+                            result += `    description: ${(c.description || '').substring(0, 120)}...\n`;
+                        }
+                        if (c.personality) {
+                            result += `    personality: ${(c.personality || '').substring(0, 120)}...\n`;
+                        }
+                        if (c.data) {
+                            result += `    data keys: [${Object.keys(c.data).join(', ')}]\n`;
+                        }
+                        result += `    shallow: ${c.shallow}\n`;
+                    }
+
+                    // Step 6: Try unshallow
+                    if (typeof context.unshallowGroupMembers === 'function') {
+                        result += `\n--- Calling unshallowGroupMembers ---\n`;
+                        try {
+                            await context.unshallowGroupMembers(found.id);
+                            // Re-resolve after unshallow
+                            activeGroupCharacters = resolveGroupMemberCharacters(found);
+                            result += `Done. Checking if data changed...\n`;
+                            for (const c of activeGroupCharacters) {
+                                if (!c._unresolved && c.data) {
+                                    const descLen = (c.description || '').length;
+                                    result += `  ${c.name}: desc=${descLen} chars, shallow=${c.shallow}\n`;
+                                }
+                            }
+                        } catch (e) {
+                            result += `ERROR: ${e.message}\n`;
+                        }
+                    }
+
+                    // Log everything to F12
+                    console.log(`[${EXTENSION_NAME}] Active group:`, found);
+                    console.log(`[${EXTENSION_NAME}] Resolved members:`, activeGroupCharacters);
+                } else {
+                    result += `\n=== NO ACTIVE GROUP ===\n`;
+                    result += `No group matched chat_id ${JSON.stringify(currentChatId)}.\n`;
+                    result += `This is likely a single-character chat.\n`;
+                    isGroupChat = false;
+                }
+
                 break;
             }
 
@@ -654,7 +697,22 @@ async function runDebugTest(testName) {
                 }
                 console.log(`[${EXTENSION_NAME}] Summary:`, summary);
                 console.log(`[${EXTENSION_NAME}] Full:`, context);
-                result = `Logged to F12.\n\n${JSON.stringify(summary, null, 2)}`;
+
+                // Also dump cached group data
+                if (cachedGroups) {
+                    console.log(`[${EXTENSION_NAME}] Cached groups:`, cachedGroups);
+                }
+                if (activeGroup) {
+                    console.log(`[${EXTENSION_NAME}] Active group:`, activeGroup);
+                    console.log(`[${EXTENSION_NAME}] Active group members:`, activeGroupCharacters);
+                }
+
+                result = `Logged to F12.\n\n`;
+                result += `Cached groups: ${cachedGroups ? cachedGroups.length + ' groups' : 'none'}\n`;
+                result += `Active group: ${activeGroup ? '"' + activeGroup.name + '"' : 'none'}\n`;
+                result += `Group members: ${activeGroupCharacters.length}\n`;
+                result += `isGroupChat: ${isGroupChat}\n`;
+                result += `\n${JSON.stringify(summary, null, 2)}`;
                 break;
             }
 
@@ -662,7 +720,7 @@ async function runDebugTest(testName) {
                 result = `Unknown test: ${testName}`;
         }
     } catch (err) {
-        result = `ERROR: ${err.message}\n${err.stack}`;
+        result += `\n\nERROR: ${err.message}\n${err.stack}`;
     }
 
     outputText.text(result);
@@ -670,7 +728,7 @@ async function runDebugTest(testName) {
 }
 
 // #############################################
-// # 7. Character Config Button (Action Bar)
+// # 8. Character Config Button (Action Bar)
 // #############################################
 
 /**
@@ -683,7 +741,7 @@ function injectCharConfigButton() {
 
     const $deleteBtn = $('#delete_character_button');
     if (!$deleteBtn.length) {
-        // ST not ready yet — retry
+        // ST not ready yet - retry
         setTimeout(injectCharConfigButton, 1000);
         return;
     }
@@ -743,7 +801,7 @@ function injectCharConfigButton() {
 }
 
 // #############################################
-// # 8. UI Rendering
+// # 9. UI Rendering
 // #############################################
 
 function buildOptions(items, selectedValue) {
@@ -1095,13 +1153,13 @@ function refreshAgentUrlDisplay() {
     if (origin) {
         $text.text(origin);
     } else {
-        $text.text('Not detected — set Custom Endpoint in ST');
+        $text.text('Not detected - set Custom Endpoint in ST');
         $text.css('color', '#d9534f');
     }
 }
 
 // #############################################
-// # 9. Utility Functions
+// # 10. Utility Functions
 // #############################################
 
 /**
@@ -1128,7 +1186,7 @@ function updateStatus(text, color) {
 }
 
 // #############################################
-// # 10. Session Management
+// # 11. Session Management
 // #############################################
 
 /**
@@ -1176,31 +1234,51 @@ async function ensureSession(backendOrigin) {
 
 /**
  * Send character card + persona data to the Agent for initial world-state parsing.
+ * In group mode, sends all group members instead of a single character.
  */
 async function initSession(backendOrigin, sessionId) {
     console.log(`[${EXTENSION_NAME}] Initializing session ${sessionId} with character data...`);
     updateStatus('Initializing session...', '#f0ad4e');
 
     try {
-        const charName = context.name2 || '';
-        const charDescription = context.description || '';
-        const charPersonality = context.personality || '';
-        const charScenario = context.scenario || '';
-        const charFirstMes = context.first_mes || '';
-        const charMesExample = context.mes_example || '';
-        const personaName = context.name1 || '';
-        const personaDescription = context.personaDescription || '';
+        let initPayload;
 
-        const initPayload = {
-            character_name: charName,
-            character_description: charDescription,
-            character_personality: charPersonality,
-            character_scenario: charScenario,
-            character_first_mes: charFirstMes,
-            character_mes_example: charMesExample,
-            persona_name: personaName,
-            persona_description: personaDescription,
-        };
+        if (isGroupChat && activeGroupCharacters.length > 0) {
+            // Group mode: send all member character cards
+            const members = activeGroupCharacters
+                .filter(c => !c._unresolved)
+                .map(c => ({
+                    name: c.name,
+                    description: c.description || '',
+                    personality: c.personality || '',
+                    scenario: c.scenario || '',
+                    first_mes: c.first_mes || '',
+                    mes_example: c.mes_example || '',
+                }));
+
+            initPayload = {
+                group_name: activeGroup.name,
+                group_members: members,
+                persona_name: context.name1 || '',
+                persona_description: context.personaDescription || '',
+                is_group: true,
+            };
+
+            console.log(`[${EXTENSION_NAME}] Group init: "${activeGroup.name}" with ${members.length} members`);
+        } else {
+            // Single character mode
+            initPayload = {
+                character_name: context.name2 || '',
+                character_description: context.description || '',
+                character_personality: context.personality || '',
+                character_scenario: context.scenario || '',
+                character_first_mes: context.first_mes || '',
+                character_mes_example: context.mes_example || '',
+                persona_name: context.name1 || '',
+                persona_description: context.personaDescription || '',
+                is_group: false,
+            };
+        }
 
         const resp = await fetch(`${backendOrigin}/api/sessions/${sessionId}/init`, {
             method: 'POST',
@@ -1222,7 +1300,7 @@ async function initSession(backendOrigin, sessionId) {
 }
 
 // #############################################
-// # 11. Message Type Detection
+// # 12. Message Type Detection
 // #############################################
 
 /**
@@ -1280,7 +1358,7 @@ async function incrementMessageId() {
 }
 
 // #############################################
-// # 12. History Trimming
+// # 13. History Trimming
 // #############################################
 
 /**
@@ -1303,18 +1381,48 @@ function trimHistory(messages, maxConversationMessages) {
 }
 
 // #############################################
-// # 13. [SYSTEM_META] Construction
+// # 14. [SYSTEM_META] Construction
 // #############################################
 
 /**
  * Build the [SYSTEM_META] tag with all per-request data.
+ * In group mode, includes group_id and member names.
  */
 function buildMetaTag(sessionId, messageId, type, swipeIndex) {
-    return `[SYSTEM_META] session_id=${sessionId} message_id=${messageId} type=${type} swipe_index=${swipeIndex}`;
+    let tag = `[SYSTEM_META] session_id=${sessionId} message_id=${messageId} type=${type} swipe_index=${swipeIndex}`;
+
+    if (isGroupChat && activeGroup) {
+        tag += ` group_id=${activeGroup.id} group_name=${activeGroup.name}`;
+
+        // Include member names for the Agent to know who is in the scene
+        const memberNames = activeGroupCharacters
+            .filter(c => !c._unresolved)
+            .map(c => c.name)
+            .join(',');
+        if (memberNames) {
+            tag += ` members=${memberNames}`;
+        }
+
+        // Include disabled members so Agent knows who is muted
+        if (Array.isArray(activeGroup.disabled_members) && activeGroup.disabled_members.length > 0) {
+            const disabledNames = activeGroup.disabled_members
+                .map(avatar => {
+                    const char = activeGroupCharacters.find(c => c.avatar === avatar);
+                    return char ? char.name : avatar;
+                })
+                .filter(n => n)
+                .join(',');
+            if (disabledNames) {
+                tag += ` disabled_members=${disabledNames}`;
+            }
+        }
+    }
+
+    return tag;
 }
 
 // #############################################
-// # 14. Fetch Interception (Core Pipeline)
+// # 15. Fetch Interception (Core Pipeline)
 // #############################################
 
 function interceptFetch() {
@@ -1354,6 +1462,15 @@ function interceptFetch() {
                 throw new Error('Could not determine Agent URL. Set Custom Endpoint in ST.');
             }
 
+            // --- Load group data if not cached yet (lazy load on first request) ---
+            if (cachedGroups === null) {
+                try {
+                    await loadGroupData();
+                } catch (e) {
+                    console.warn(`[${EXTENSION_NAME}] Group data load failed (continuing in single-char mode):`, e.message);
+                }
+            }
+
             // --- Ensure session exists ---
             const sessionId = await ensureSession(backendOrigin);
             if (!sessionId) {
@@ -1368,6 +1485,7 @@ function interceptFetch() {
             // --- Detect message type ---
             const messageType = detectMessageType(bodyObject.messages);
             console.log(`[${EXTENSION_NAME}] Message type: ${messageType}, swipe_index: ${currentSwipeIndex}`);
+            console.log(`[${EXTENSION_NAME}] Group mode: ${isGroupChat}${isGroupChat && activeGroup ? ' ("' + activeGroup.name + '")' : ''}`);
 
             // --- Update message counter ---
             let messageId = getMessageId();
@@ -1388,11 +1506,10 @@ function interceptFetch() {
             // --- Build fetch options ---
             const newOptions = { ...options, body: JSON.stringify(bodyObject) };
 
-            // --- Forward to Agent (or let it go to the original URL if already pointing there) ---
+            // --- Forward to Agent ---
             let targetUrl = url;
             const stOrigin = getAgentOrigin();
             if (stOrigin) {
-                // Ensure we're sending to the Agent
                 try {
                     const urlObj = new URL(urlString);
                     targetUrl = `${stOrigin}${urlObj.pathname}${urlObj.search}`;
@@ -1419,7 +1536,7 @@ function interceptFetch() {
                 );
             }
 
-            updateStatus('Error — check console', '#d9534f');
+            updateStatus('Error - check console', '#d9534f');
 
             return originalFetch.call(window, url, options);
         }
@@ -1427,19 +1544,25 @@ function interceptFetch() {
 }
 
 // #############################################
-// # 15. Chat Event Hooks
+// # 16. Chat Event Hooks
 // #############################################
 
 function hookChatEvents() {
     const eventBus = context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {
-            console.log(`[${EXTENSION_NAME}] Chat changed — resetting detection state.`);
+            console.log(`[${EXTENSION_NAME}] Chat changed - resetting detection state and group data.`);
             lastUserMsgHash = null;
             lastAssistantMsgHash = null;
             lastConversationCount = 0;
             currentSwipeIndex = 0;
             configSynced = false;
+
+            // Reset group cache so it reloads for the new chat
+            cachedGroups = null;
+            activeGroup = null;
+            activeGroupCharacters = [];
+            isGroupChat = false;
 
             // Refresh the Agent URL display (may change per-chat in some configs)
             refreshAgentUrlDisplay();
@@ -1453,7 +1576,7 @@ function hookChatEvents() {
 }
 
 // #############################################
-// # 16. Initialization
+// # 17. Initialization
 // #############################################
 
 (async function init() {
