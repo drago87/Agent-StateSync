@@ -348,6 +348,14 @@ function hashStr(str) {
 }
 
 /**
+ * HTML-escape a string for safe injection into innerHTML.
+ */
+function esc(s) {
+    if (s == null) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
  * Update the small status text in the settings panel.
  */
 function updateStatus(text, color) {
@@ -777,97 +785,66 @@ async function saveCharConfig(config) {
 }
 
 /**
- * Attempt to inject an "Agent-StateSync" button into SillyTavern's
- * Character Management action bar (alongside "Advanced Definitions",
- * "Export and Download", "Delete Character", etc.).
+ * Inject an "Agent-StateSync" button into SillyTavern's Character Management
+ * action bar (alongside Advanced Definitions, Export and Download, Delete Character).
  *
- * Uses a MutationObserver to detect when the char management panel opens.
- * Looks for the button bar by finding a flex container that has ≥2
- * known character-action buttons (by title attribute).
+ * SillyTavern's character edit panel is `#rm_ch_create_block` (right sidebar).
+ * The button bar is `.form_create_bottom_buttons_block`, containing divs like
+ * `#advanced_div`, `#export_button`, `#delete_button` — all with class `menu_button`.
+ *
+ * We use a MutationObserver to detect when the panel opens and inject our button.
  */
 function setupCharMgmtButton() {
     const observer = new MutationObserver(() => {
-        tryInjectCharMgmtButton();
+        injectCharMgmtButton();
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
     // Also try immediately in case panel is already open
-    tryInjectCharMgmtButton();
+    injectCharMgmtButton();
 }
 
-/**
- * The CHAR_ACTION_TITLES help us identify the correct button bar
- * even if SillyTavern changes the exact DOM structure between versions.
- */
-const CHAR_ACTION_TITLES = [
-    'advanced', 'export', 'favorite', 'favourite', 'delete',
-    'duplicate', 'rename', 'personality', 'describe',
-    'export and download', 'advanced definitions',
-];
-
-function tryInjectCharMgmtButton() {
+function injectCharMgmtButton() {
     // Already injected? Skip.
     if (document.getElementById('ass-char-mgmt-btn')) return;
 
-    // Collect all <button> elements that have a title attribute
-    const allTitledButtons = document.querySelectorAll('button[title]');
+    // Find SillyTavern's character edit panel (right sidebar)
+    const charPanel = document.getElementById('rm_ch_create_block');
+    if (!charPanel) return;
 
-    // Group them by their parent flex container
-    const containers = new Map();
-    for (const btn of allTitledButtons) {
-        const title = (btn.getAttribute('title') || '').toLowerCase().trim();
-        const isCharAction = CHAR_ACTION_TITLES.some(t => title.includes(t));
-        if (!isCharAction) continue;
+    // Find the button bar container
+    const buttonBar = charPanel.querySelector('.form_create_bottom_buttons_block');
+    if (!buttonBar) return;
 
-        // Walk up to find a flex container
-        const flexParent = btn.closest('.flexGap5, .flex-container, [class*="flex"]');
-        if (!flexParent) continue;
+    // Find a known button to copy styling from
+    const refButton = buttonBar.querySelector('#export_button')
+                   || buttonBar.querySelector('#advanced_div')
+                   || buttonBar.querySelector('.menu_button');
+    if (!refButton) return;
 
-        if (!containers.has(flexParent)) containers.set(flexParent, 0);
-        containers.set(flexParent, containers.get(flexParent) + 1);
-    }
-
-    // Find the container with the most character-action buttons
-    let bestContainer = null;
-    let bestCount = 0;
-    for (const [container, count] of containers) {
-        // Only consider containers inside character management areas
-        const isInCharArea = container.closest(
-            '#character_edit, #character-group-container, ' +
-            '#character_popup, .character_select, #top-bar, ' +
-            '[id*="character"]'
-        );
-        if (isInCharArea && count > bestCount) {
-            bestContainer = container;
-            bestCount = count;
-        }
-    }
-
-    // Fallback: if we didn't find a char-area parent, just use the best container overall
-    if (!bestContainer && bestCount < 2) {
-        for (const [container, count] of containers) {
-            if (count > bestCount) {
-                bestContainer = container;
-                bestCount = count;
-            }
-        }
-    }
-
-    // Need at least 2 known buttons to be confident this is the right bar
-    if (!bestContainer || bestCount < 2) return;
-
-    // Inject our button at the end of the container
-    const ourBtn = document.createElement('button');
-    ourBtn.id = 'ass-char-mgmt-btn';
-    ourBtn.className = bestContainer.querySelector('button').className || 'menu_button';
-    ourBtn.title = 'Agent-StateSync — Character Config';
-    ourBtn.innerHTML = '<i class="fa-solid fa-brain"></i><span data-i18n="Agent-StateSync"> Agent-StateSync</span>';
-    ourBtn.addEventListener('click', (e) => {
+    // Create our button as a <div> with menu_button class (matching ST's convention)
+    const btn = document.createElement('div');
+    btn.id = 'ass-char-mgmt-btn';
+    btn.className = 'menu_button fa-solid fa-brain';
+    btn.title = 'Agent-StateSync — Character Config';
+    btn.style.cursor = 'pointer';
+    btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         openCharMgmtDialog();
     });
-    bestContainer.appendChild(ourBtn);
+
+    // Insert before the "More..." dropdown (which is a <label> after the button bar)
+    // This puts us at the end of the action buttons but before the dropdown
+    const moreDropdown = buttonBar.nextElementSibling;
+    if (moreDropdown && moreDropdown.querySelector('#char-management-dropdown')) {
+        buttonBar.appendChild(btn);
+    } else {
+        // Fallback: just append to end of button bar
+        buttonBar.appendChild(btn);
+    }
+
+    console.log(`[${EXTENSION_NAME}] Injected Character Management button.`);
 }
 
 /**
