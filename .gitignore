@@ -10,6 +10,7 @@
 
 # production
 /build
+build.bat
 
 # misc
 .DS_Store
