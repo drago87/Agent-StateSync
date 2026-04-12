@@ -2,11 +2,8 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.3 — Agent URL auto-detected from ST Custom Endpoint (read-only).
-//          Added collapsible Debug Panel with context API exploration.
-//          Group chat exploration: Group Scan, context.chat, context.character,
-//          unshallowMembers, getGroupMembers, Group Functions.
-//          Fixed eventTypes (object not array), safe summarization for all values.
+// v2.4 — Group chat deep exploration: ST server API (/api/groups), character scanning,
+//          page URL/DOM analysis, safe value summarization, async debug tests.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -354,27 +351,24 @@ function buildDebugPanelHTML() {
         <!-- Row 1: Basics -->
         <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
             <button class="ass-dbg-btn menu_button" data-test="chatId">Chat ID</button>
-            <button class="ass-dbg-btn menu_button" data-test="characterId">Character ID</button>
             <button class="ass-dbg-btn menu_button" data-test="names">name1/name2</button>
             <button class="ass-dbg-btn menu_button" data-test="chatMetadata">Chat Metadata</button>
             <button class="ass-dbg-btn menu_button" data-test="mainApi">mainApi</button>
             <button class="ass-dbg-btn menu_button" data-test="chatCompletion">chatCompletion</button>
         </div>
-        <!-- Row 2: Group Chat -->
+        <!-- Row 2: Group Chat (the important row) -->
         <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
-            <button class="ass-dbg-btn menu_button" data-test="groupScan" style="border-color:rgba(255,165,0,0.5);" title="Scan all context paths for group-related data">Group Scan (all paths)</button>
-            <button class="ass-dbg-btn menu_button" data-test="chatObject">context.chat</button>
-            <button class="ass-dbg-btn menu_button" data-test="characterObject">context.character</button>
-            <button class="ass-dbg-btn menu_button" data-test="unshallowMembers">unshallowMembers()</button>
-            <button class="ass-dbg-btn menu_button" data-test="getGroupMembers">getGroupMembers()</button>
-            <button class="ass-dbg-btn menu_button" data-test="groups">context.groups</button>
+            <button class="ass-dbg-btn menu_button" data-test="stApiGroups" style="border-color:rgba(255,165,0,0.5);" title="Fetch groups from ST's server API">ST API: /api/groups</button>
+            <button class="ass-dbg-btn menu_button" data-test="scanCharsForGroups" title="Search all 64 chars for is_group=true">Scan Chars for Groups</button>
+            <button class="ass-dbg-btn menu_button" data-test="pageUrlInfo">Page URL</button>
+            <button class="ass-dbg-btn menu_button" data-test="groupScan">Group Scan (old)</button>
+            <button class="ass-dbg-btn menu_button" data-test="groupFunctions">Group Functions</button>
         </div>
         <!-- Row 3: Advanced -->
         <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px;">
-            <button class="ass-dbg-btn menu_button" data-test="characters">Characters (count)</button>
-            <button class="ass-dbg-btn menu_button" data-test="currentCharacter">getOneCharacter</button>
+            <button class="ass-dbg-btn menu_button" data-test="contextChat">context.chat (msgs)</button>
+            <button class="ass-dbg-btn menu_button" data-test="characters">Characters (64)</button>
             <button class="ass-dbg-btn menu_button" data-test="eventTypes">Event Types</button>
-            <button class="ass-dbg-btn menu_button" data-test="groupFunctions" title="List all group-related functions on context">Group Functions</button>
             <button class="ass-dbg-btn menu_button" data-test="fullDump" style="border-color:rgba(217,83,79,0.5);">Full Dump (F12)</button>
         </div>
         <div id="ass-dbg-output" style="margin-top:6px; display:none;">
@@ -426,10 +420,11 @@ function safeSummarize(val, depth) {
 /**
  * Run a debug test and show the result.
  */
-function runDebugTest(testName) {
+async function runDebugTest(testName) {
     const outputDiv = $('#ass-dbg-output');
     const outputText = $('#ass-dbg-output-text');
     outputDiv.show();
+    outputText.text('Loading...');
 
     let result = '';
     let label = testName;
@@ -444,12 +439,8 @@ function runDebugTest(testName) {
                 result = `Chat ID: ${JSON.stringify(chatId)} (type: ${typeof chatId})`;
                 break;
             }
-            case 'characterId': {
-                result = `characterId: ${JSON.stringify(context.characterId)} (type: ${typeof context.characterId})`;
-                break;
-            }
             case 'names': {
-                result = `name1 (User): ${JSON.stringify(context.name1)}\nname2 (Char): ${JSON.stringify(context.name2)}`;
+                result = `name1 (User): ${JSON.stringify(context.name1)}\nname2 (Char/Group): ${JSON.stringify(context.name2)}`;
                 break;
             }
             case 'chatMetadata': {
@@ -468,179 +459,179 @@ function runDebugTest(testName) {
             }
 
             // ---- Row 2: Group Chat ----
+            case 'stApiGroups': {
+                // Fetch groups directly from ST's server API
+                result = `Fetching /api/groups from ST server...`;
+                outputText.text(result);
+                try {
+                    const resp = await fetch('/api/groups');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        // data might be an array or object with a groups property
+                        let groups = Array.isArray(data) ? data : (data.groups || data);
+                        const count = Array.isArray(groups) ? groups.length : 'N/A';
+                        result = `=== ST /api/groups ===\n`;
+                        result += `Total groups: ${count}\n\n`;
+
+                        if (Array.isArray(groups) && groups.length > 0) {
+                            // Show each group's name, id, members
+                            for (let i = 0; i < Math.min(groups.length, 10); i++) {
+                                const g = groups[i];
+                                const gName = g.name || g.chat_name || '(unnamed)';
+                                const gId = g.id || g.chat_id || g.group_id || '(no id)';
+                                const members = g.members || g.group_members || [];
+                                const memberCount = Array.isArray(members) ? members.length : (typeof members === 'object' ? Object.keys(members).length : '?');
+                                const isGroup = g.is_group || g.isGroup || false;
+                                result += `--- Group ${i + 1}: "${gName}" ---\n`;
+                                result += `  id: ${JSON.stringify(gId)}\n`;
+                                result += `  is_group: ${isGroup}\n`;
+                                result += `  members: ${memberCount}\n`;
+                                if (Array.isArray(members) && members.length > 0) {
+                                    result += `  member names: ${JSON.stringify(members.slice(0, 8).map(m => m.name || m.avatar || m))}\n`;
+                                }
+                                // Show all keys for first group
+                                if (i === 0) {
+                                    result += `  all keys: [${Object.keys(g).join(', ')}]\n`;
+                                }
+                                result += `\n`;
+                            }
+                        }
+
+                        console.log(`[${EXTENSION_NAME}] /api/groups response:`, groups);
+                    } else {
+                        result = `ERROR: /api/groups returned ${resp.status} ${resp.statusText}`;
+                    }
+                } catch (err) {
+                    result = `ERROR fetching /api/groups: ${err.message}`;
+                }
+                break;
+            }
+            case 'scanCharsForGroups': {
+                // Search context.characters for entries that look like groups
+                const chars = context.characters;
+                if (!Array.isArray(chars)) {
+                    result = `context.characters is not an array: ${typeof chars}`;
+                    break;
+                }
+                const groupChars = [];
+                const可疑 = []; // potential groups by name patterns
+
+                for (let i = 0; i < chars.length; i++) {
+                    const c = chars[i];
+                    const isGroup = c.is_group || c.isGroup || false;
+                    const hasMembers = Array.isArray(c.members) || Array.isArray(c.group_members);
+                    const memberCount = hasMembers
+                        ? (Array.isArray(c.members) ? c.members.length : c.group_members.length)
+                        : 0;
+
+                    if (isGroup || hasMembers) {
+                        groupChars.push({
+                            index: i,
+                            name: c.name || c.avatar || '(unnamed)',
+                            id: c.id || c.chat_id || c.group_id,
+                            is_group: isGroup,
+                            memberCount: memberCount,
+                            allKeys: Object.keys(c),
+                        });
+                    }
+
+                    // Also flag chars with 'group' in name
+                    const name = (c.name || '').toLowerCase();
+                    if (name.includes('group') || name.includes('party') || name.includes('team')) {
+                        可疑.push({ index: i, name: c.name, allKeys: Object.keys(c) });
+                    }
+                }
+
+                result = `=== Scanning ${chars.length} characters for groups ===\n\n`;
+                result += `Found ${groupChars.length} with is_group=true or members:\n`;
+
+                if (groupChars.length > 0) {
+                    for (const g of groupChars) {
+                        result += `\n--- "${g.name}" (index ${g.index}) ---\n`;
+                        result += `  is_group: ${g.is_group}\n`;
+                        result += `  memberCount: ${g.memberCount}\n`;
+                        result += `  id: ${JSON.stringify(g.id)}\n`;
+                        result += `  all keys: [${g.allKeys.join(', ')}]\n`;
+                    }
+                } else {
+                    result += `  (none found)\n`;
+                }
+
+                if (可疑.length > 0) {
+                    result += `\n\nPossible groups by name:\n`;
+                    for (const s of 可疑) {
+                        result += `  "${s.name}" (index ${s.index}) keys: [${s.allKeys.join(', ')}]\n`;
+                    }
+                }
+
+                // Also show structure of first character so we know what fields exist
+                if (chars.length > 0) {
+                    result += `\n\nSample character[0] keys: [${Object.keys(chars[0]).join(', ')}]`;
+                    const c0 = chars[0];
+                    // Check if characters have chat/visible_chats properties
+                    result += `\ncharacter[0].chat type: ${typeof c0.chat} ${Array.isArray(c0.chat) ? '(array[' + c0.chat.length + '])' : ''}`;
+                    result += `\ncharacter[0].data keys: ${c0.data ? Object.keys(c0.data).join(', ') : '(no data)'}`;
+                }
+
+                console.log(`[${EXTENSION_NAME}] Group chars found:`, groupChars);
+                console.log(`[${EXTENSION_NAME}] All chars sample:`, chars[0]);
+                break;
+            }
+            case 'pageUrlInfo': {
+                const url = window.location.href;
+                const origin = window.location.origin;
+                const path = window.location.pathname;
+                const hash = window.location.hash;
+                result = `=== Page URL ===\n`;
+                result += `Full URL: ${url}\n`;
+                result += `Origin: ${origin}\n`;
+                result += `Path: ${path}\n`;
+                result += `Hash: ${hash}\n\n`;
+                // Check for group/chat params in URL
+                const urlObj = new URL(url);
+                const params = Object.fromEntries(urlObj.searchParams);
+                result += `Query params: ${JSON.stringify(params)}\n\n`;
+                // Also check DOM for hidden group state
+                const $charName = $('#character_name_pole');
+                const $groupName = $('#group_name_pole');
+                const $rmInfo = $('#right-nav-panel');
+                result += `DOM checks:\n`;
+                result += `  #character_name_pole: ${$charName.length ? $charName.text().trim() : '(not found)'}\n`;
+                result += `  #group_name_pole: ${$groupName.length ? $groupName.text().trim() : '(not found)'}\n`;
+                result += `  body classes: ${document.body.className}\n`;
+                // Check for data attributes on body or chat container
+                const $body = $('body');
+                result += `  body data-attr keys: [${Array.from($body[0]?.dataset || {}).join(', ')}]\n`;
+                break;
+            }
             case 'groupScan': {
-                // Scan every possible path for group data
+                // Legacy scan — kept for reference
                 const paths = [
-                    'context.groupId',
-                    'context.isGroup',
-                    'context.groups',
-                    'context.group',
-                    'context.activeGroup',
-                    'context.active_group',
-                    'context.groupChat',
-                    'context.group_chat',
-                    'context.chat?.group_id',
-                    'context.chat?.is_group',
-                    'context.chat?.members',
-                    'context.chat?.chat_id',
-                    'context.character?.is_group',
-                    'context.character?.group_id',
-                    'context.character?.members',
-                    'context.character?.data?.group_id',
-                    'context.character?.data?.members',
-                    'context.chatMetadata?.group_id',
-                    'context.chatMetadata?.members',
+                    'groupId', 'isGroup', 'groups', 'group', 'activeGroup',
+                    'chat?.group_id', 'chat?.is_group',
+                    'character?.is_group', 'character?.members',
+                    'chatMetadata?.group_id', 'chatMetadata?.members',
                 ];
                 const lines = [];
                 for (const p of paths) {
                     try {
-                        // Safely evaluate dotted paths
                         const val = p.split('?.').reduce((obj, key) => {
                             if (obj === null || obj === undefined) return undefined;
                             return obj[key];
                         }, context);
-                        lines.push(`${p} = ${safeSummarize(val)}`);
+                        lines.push(`context.${p} = ${safeSummarize(val)}`);
                     } catch (e) {
-                        lines.push(`${p} = ERROR: ${e.message}`);
+                        lines.push(`context.${p} = ERROR`);
                     }
                 }
-                result = `=== Group Data Scan (all paths) ===\n${lines.join('\n')}`;
-                // Also try calling functions
-                result += `\n\n=== Group Functions ===`;
-                const funcNames = [
-                    'unshallowGroupMembers', 'getGroupMembers', 'getGroupId',
-                    'getActiveGroup', 'isGroupChat', 'getChat', 'getCharacter',
-                ];
-                for (const fn of funcNames) {
-                    if (typeof context[fn] === 'function') {
-                        try {
-                            const ret = context[fn]();
-                            result += `\n${fn}() = ${safeSummarize(ret)}`;
-                        } catch (e) {
-                            result += `\n${fn}() = ERROR: ${e.message}`;
-                        }
-                    } else {
-                        result += `\n${fn} = ${typeof context[fn]}`;
-                    }
-                }
-                break;
-            }
-            case 'chatObject': {
-                const chat = context.chat;
-                if (chat) {
-                    const keys = Object.keys(chat);
-                    const summary = {};
-                    for (const k of keys) {
-                        summary[k] = safeSummarize(chat[k], 1);
-                    }
-                    result = `context.chat keys (${keys.length}):\n${JSON.stringify(summary, null, 2)}`;
-                    console.log(`[${EXTENSION_NAME}] context.chat:`, chat);
-                } else {
-                    result = 'context.chat is undefined/null';
-                }
-                break;
-            }
-            case 'characterObject': {
-                const char = context.character;
-                if (char) {
-                    const keys = Object.keys(char);
-                    const summary = {};
-                    for (const k of keys) {
-                        summary[k] = safeSummarize(char[k], 1);
-                    }
-                    result = `context.character keys (${keys.length}):\n${JSON.stringify(summary, null, 2)}`;
-                    console.log(`[${EXTENSION_NAME}] context.character:`, char);
-                } else {
-                    result = 'context.character is undefined/null';
-                }
-                break;
-            }
-            case 'unshallowMembers': {
-                if (typeof context.unshallowGroupMembers === 'function') {
-                    const members = context.unshallowGroupMembers();
-                    // Handle both array and object returns
-                    const isArray = Array.isArray(members);
-                    const isObj = members && typeof members === 'object' && !isArray;
-                    if (isArray) {
-                        result = `unshallowGroupMembers() returned array[${members.length}]:\n${JSON.stringify(members, null, 2)}`;
-                    } else if (isObj) {
-                        const keys = Object.keys(members);
-                        result = `unshallowGroupMembers() returned object{${keys.length}} keys: [${keys.join(', ')}]`;
-                        result += `\n\nValue:\n${JSON.stringify(members, null, 2)}`;
-                    } else {
-                        result = `unshallowGroupMembers() returned: ${JSON.stringify(members)}`;
-                    }
-                    console.log(`[${EXTENSION_NAME}] unshallowGroupMembers raw:`, members);
-                } else {
-                    result = `unshallowGroupMembers not a function (type: ${typeof context.unshallowGroupMembers})`;
-                }
-                break;
-            }
-            case 'getGroupMembers': {
-                if (typeof context.getGroupMembers === 'function') {
-                    const members = context.getGroupMembers();
-                    const isArray = Array.isArray(members);
-                    result = `getGroupMembers() returned: ${isArray ? 'array[' + members.length + ']' : typeof members}`;
-                    result += `\n${JSON.stringify(members, null, 2)}`;
-                    console.log(`[${EXTENSION_NAME}] getGroupMembers raw:`, members);
-                } else {
-                    result = `getGroupMembers not a function (type: ${typeof context.getGroupMembers})`;
-                }
-                break;
-            }
-            case 'groups': {
-                const groups = context.groups;
-                result = `context.groups: ${safeSummarize(groups)}`;
-                console.log(`[${EXTENSION_NAME}] context.groups:`, groups);
-                break;
-            }
-
-            // ---- Row 3: Advanced ----
-            case 'characters': {
-                const chars = context.characters;
-                const count = Array.isArray(chars) ? chars.length : 'N/A (not array)';
-                result = `characters count: ${count} (type: ${typeof chars})`;
-                if (Array.isArray(chars) && chars.length > 0) {
-                    const names = chars.map(c => c.name || c.avatar || '(unnamed)').slice(0, 10);
-                    result += `\nFirst 10: ${JSON.stringify(names)}`;
-                }
-                break;
-            }
-            case 'currentCharacter': {
-                if (typeof context.getOneCharacter === 'function') {
-                    const char = context.getOneCharacter(context.characterId);
-                    result = `getOneCharacter(${context.characterId}):\n${JSON.stringify(char, null, 2)}`;
-                } else {
-                    result = `getOneCharacter not available (type: ${typeof context.getOneCharacter})\ncharacterId: ${context.characterId}`;
-                }
-                break;
-            }
-            case 'eventTypes': {
-                const ev = context.eventTypes || context.event_source?.eventTypes;
-                if (ev) {
-                    // It's an object with keys, not an array
-                    const keys = Object.keys(ev);
-                    const isArr = Array.isArray(ev);
-                    if (isArr) {
-                        result = `eventTypes (array[${ev.length}]):\n${ev.join(', ')}`;
-                    } else {
-                        result = `eventTypes (object{${keys.length}}):\n${keys.join('\n')}`;
-                    }
-                    console.log(`[${EXTENSION_NAME}] eventTypes raw:`, ev);
-                } else {
-                    result = 'eventTypes not found on context.';
-                    if (context.event_source) {
-                        result += `\nevent_source keys: ${Object.keys(context.event_source).join(', ')}`;
-                    }
-                }
+                result = `=== Context Group Paths ===\n${lines.join('\n')}`;
                 break;
             }
             case 'groupFunctions': {
-                // List all functions on context that contain 'group' or 'member' or 'Group' or 'Member'
                 const allKeys = Object.keys(context);
                 const groupFns = allKeys.filter(k => {
                     const lk = k.toLowerCase();
-                    return lk.includes('group') || lk.includes('member') || lk.includes('chat');
+                    return lk.includes('group') || lk.includes('member');
                 });
                 const fnList = [];
                 const varList = [];
@@ -653,10 +644,69 @@ function runDebugTest(testName) {
                         varList.push(`${k}: ${safeSummarize(val, 1)}`);
                     }
                 }
-                result = `=== Group/Chat-related on context (${groupFns.length} matches) ===\n`;
+                result = `=== Group/Member on context (${groupFns.length} matches) ===\n`;
                 result += `\nFunctions:\n${fnList.map(f => `  ${f}()`).join('\n') || '  (none)'}`;
                 result += `\n\nVariables:\n${varList.map(v => `  ${v}`).join('\n') || '  (none)'}`;
-                console.log(`[${EXTENSION_NAME}] All group/chat keys:`, groupFns);
+                break;
+            }
+
+            // ---- Row 3: Advanced ----
+            case 'contextChat': {
+                const chat = context.chat;
+                if (Array.isArray(chat)) {
+                    result = `context.chat is array[${chat.length}] (chat messages)\n\n`;
+                    // Show first 2 messages summary
+                    for (let i = 0; i < Math.min(chat.length, 3); i++) {
+                        const m = chat[i];
+                        const keys = m ? Object.keys(m) : [];
+                        const role = m?.role || m?.is_user !== undefined ? (m.is_user ? 'user' : 'assistant') : '?';
+                        const content = m?.mes || m?.content || '';
+                        const preview = String(content).substring(0, 80);
+                        result += `msg[${i}]: role=${role} keys=[${keys.join(',')}] "${preview}..."\n`;
+                    }
+                    console.log(`[${EXTENSION_NAME}] context.chat (messages):`, chat);
+                } else if (chat && typeof chat === 'object') {
+                    result = `context.chat keys (${Object.keys(chat).length}):\n${JSON.stringify(chat, null, 2).substring(0, 1500)}`;
+                } else {
+                    result = `context.chat: ${safeSummarize(chat)}`;
+                }
+                break;
+            }
+            case 'characters': {
+                const chars = context.characters;
+                const count = Array.isArray(chars) ? chars.length : 'N/A';
+                result = `characters: ${count}\n\n`;
+                if (Array.isArray(chars) && chars.length > 0) {
+                    result += `First 5 names:\n`;
+                    for (let i = 0; i < Math.min(5, chars.length); i++) {
+                        result += `  [${i}] ${chars[i].name || chars[i].avatar || '(unnamed)'}\n`;
+                    }
+                    result += `\ncharacter[0] keys: [${Object.keys(chars[0]).join(', ')}]`;
+                }
+                break;
+            }
+            case 'eventTypes': {
+                const ev = context.eventTypes || context.event_types;
+                if (ev) {
+                    const keys = Object.keys(ev);
+                    const isArr = Array.isArray(ev);
+                    if (isArr) {
+                        result = `eventTypes (array[${ev.length}]):\n${ev.join(', ')}`;
+                    } else {
+                        result = `eventTypes (object{${keys.length}}):\n${keys.join('\n')}`;
+                    }
+                    // Filter for group-related events
+                    const groupEvents = keys.filter(k => {
+                        const lk = k.toLowerCase();
+                        return lk.includes('group') || lk.includes('member') || lk.includes('chat');
+                    });
+                    if (groupEvents.length > 0) {
+                        result += `\n\nGroup/Chat events (${groupEvents.length}):\n${groupEvents.join('\n')}`;
+                    }
+                    console.log(`[${EXTENSION_NAME}] eventTypes raw:`, ev);
+                } else {
+                    result = 'eventTypes not found.';
+                }
                 break;
             }
             case 'fullDump': {
@@ -677,7 +727,7 @@ function runDebugTest(testName) {
                 }
                 console.log(`[${EXTENSION_NAME}] Context summary:`, summary);
                 console.log(`[${EXTENSION_NAME}] Full context object:`, context);
-                result = `Full dump logged to F12 console.\n\nSummary of keys (${Object.keys(context).length} total):\n${JSON.stringify(summary, null, 2)}`;
+                result = `Full dump logged to F12 console.\n\nKeys (${Object.keys(context).length} total):\n${JSON.stringify(summary, null, 2)}`;
                 break;
             }
             default:
@@ -1512,7 +1562,7 @@ function hookChatEvents() {
     // Inject Char Config button into action bar
     injectCharConfigButton();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.3`);
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.4`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
     console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
 })();
