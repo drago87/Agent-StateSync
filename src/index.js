@@ -2,9 +2,9 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.6 — Phase 1: Proactive chat-changed hook with confirmation popup.
-//          Removed debug panel from UI. Group data auto-loaded on chat change.
-//          Session lookup by ST chat ID. st_chat_id persisted in Agent DB.
+// v2.7 — Phase 1: LLM status indicators now ask the Agent instead of
+//          probing backends directly from the browser. This fixes "no URL set"
+//          when URLs are configured in config.ini rather than the extension.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -256,64 +256,61 @@ async function checkAgentHealth() {
 }
 
 /**
- * Check if an LLM backend is reachable by hitting its /v1/models endpoint.
- * The URL should be a host:port string like "192.168.0.1:5001".
- * Returns true if the endpoint responds within the timeout.
+ * Update the LLM status dots in the extension settings panel.
+ * Asks the Agent to probe both backends (the Agent runs server-side
+ * and has the actual URLs from config.ini — the browser may not be
+ * able to reach the backends directly due to CORS or networking).
  */
-async function probeLlmEndpoint(hostPort) {
-    if (!hostPort || !hostPort.trim()) return false;
-    const url = `http://${hostPort.trim()}/v1/models`;
+async function checkLlmStatuses() {
+    const origin = getAgentOrigin();
+    if (!origin) return;
+
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-        const resp = await fetch(url, { method: 'GET', signal: controller.signal });
+        const resp = await fetch(`${origin}/api/dashboard/status`, {
+            method: 'GET',
+            signal: controller.signal,
+        });
         clearTimeout(timeoutId);
-        return resp.ok;
+
+        if (!resp.ok) return;
+        const status = await resp.json();
+
+        // RP LLM
+        const rpDot = $('#ass-rp-dot');
+        if (rpDot.length) {
+            rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
+            if (status.rp_llm_disabled) {
+                rpDot.addClass('ass-llm-dot-off');
+                rpDot.attr('title', 'RP LLM: disabled (config.ini)');
+            } else if (status.rp_llm_connected) {
+                rpDot.addClass('ass-llm-dot-green');
+                rpDot.attr('title', 'RP LLM: online (via Agent)');
+            } else {
+                rpDot.addClass('ass-llm-dot-red');
+                rpDot.attr('title', 'RP LLM: offline (via Agent)');
+            }
+        }
+
+        // Instruct LLM
+        const instructDot = $('#ass-instruct-dot');
+        if (instructDot.length) {
+            instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
+            if (status.instruct_llm_disabled) {
+                instructDot.addClass('ass-llm-dot-off');
+                instructDot.attr('title', 'Instruct LLM: disabled (config.ini)');
+            } else if (status.instruct_llm_connected) {
+                instructDot.addClass('ass-llm-dot-green');
+                instructDot.attr('title', 'Instruct LLM: online (via Agent)');
+            } else {
+                instructDot.addClass('ass-llm-dot-red');
+                instructDot.attr('title', 'Instruct LLM: offline (via Agent)');
+            }
+        }
     } catch (e) {
-        return false;
-    }
-}
-
-/**
- * Update the LLM status dots in the extension settings panel.
- * Called during each health check cycle.
- */
-async function checkLlmStatuses() {
-    const settings = getSettings();
-    if (!settings.enabled) return;
-
-    // Probe RP LLM
-    const rpOk = await probeLlmEndpoint(settings.rpLlmUrl);
-    const rpDot = $('#ass-rp-dot');
-    if (rpDot.length) {
-        rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
-        if (!settings.rpLlmUrl || !settings.rpLlmUrl.trim()) {
-            rpDot.addClass('ass-llm-dot-off');
-            rpDot.attr('title', 'RP LLM: no URL set');
-        } else if (rpOk) {
-            rpDot.addClass('ass-llm-dot-green');
-            rpDot.attr('title', `RP LLM: online (${settings.rpLlmUrl})`);
-        } else {
-            rpDot.addClass('ass-llm-dot-red');
-            rpDot.attr('title', `RP LLM: offline (${settings.rpLlmUrl})`);
-        }
-    }
-
-    // Probe Instruct LLM
-    const instructOk = await probeLlmEndpoint(settings.instructLlmUrl);
-    const instructDot = $('#ass-instruct-dot');
-    if (instructDot.length) {
-        instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
-        if (!settings.instructLlmUrl || !settings.instructLlmUrl.trim()) {
-            instructDot.addClass('ass-llm-dot-off');
-            instructDot.attr('title', 'Instruct LLM: no URL set');
-        } else if (instructOk) {
-            instructDot.addClass('ass-llm-dot-green');
-            instructDot.attr('title', `Instruct LLM: online (${settings.instructLlmUrl})`);
-        } else {
-            instructDot.addClass('ass-llm-dot-red');
-            instructDot.attr('title', `Instruct LLM: offline (${settings.instructLlmUrl})`);
-        }
+        // Silent — will retry on next health check cycle
+        console.debug(`[${EXTENSION_NAME}] LLM status check via Agent failed:`, e.message);
     }
 }
 
