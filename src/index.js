@@ -1137,14 +1137,6 @@ async function showNewChatConfirm(origin, chatId) {
             <p style="margin:0 0 12px 0; font-size:11px; color:var(--fg_dim);">
                 The Agent will initialize with this chat's character/group data.
             </p>
-            <div style="display:flex; gap:8px; justify-content:center;">
-                <button id="ass-popup-yes" class="menu_button" style="border-color:rgba(92,184,92,0.5);">
-                    <i class="fa-solid fa-check"></i> Create Session
-                </button>
-                <button id="ass-popup-no" class="menu_button" style="border-color:rgba(217,83,79,0.5);">
-                    <i class="fa-solid fa-xmark"></i> Not Now
-                </button>
-            </div>
         </div>
     `;
 
