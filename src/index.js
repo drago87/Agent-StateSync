@@ -1217,6 +1217,18 @@ async function createAndInitSession(origin, chatId) {
  * Creates one via POST /api/sessions if missing.
  */
 async function ensureSession(backendOrigin) {
+    // --- Ensure group data is loaded before doing anything ---
+    // If proactive didn't run (or hasn't finished yet), we need group
+    // info so initSession() can decide between group vs single-char mode.
+    if (!cachedGroups && !isGroupChat) {
+        try {
+            console.log(`[${EXTENSION_NAME}] ensureSession: loading group data (proactive may have missed it)`);
+            await loadGroupData();
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] ensureSession: group data load failed, single-char fallback`, e.message);
+        }
+    }
+
     // --- Check if session already exists in metadata ---
     if (context.chatMetadata && context.chatMetadata[META_KEY_SESSION]) {
         if (!context.chatMetadata[META_KEY_INITIALIZED]) {
