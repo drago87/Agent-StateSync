@@ -162,13 +162,20 @@ async function syncConfigToAgent(settings) {
     }
 
     const configPayload = {
-        rp_llm_url: settings.rpLlmUrl,
-        instruct_llm_url: settings.instructLlmUrl,
         rp_template: settings.rpTemplate,
         instruct_template: settings.instructTemplate,
         thinking_steps: settings.thinkingSteps,
         refinement_steps: settings.refinementSteps,
     };
+
+    // Only include URL fields if they have actual values.
+    // The Agent uses config.ini fallbacks when URLs are not provided.
+    if (settings.rpLlmUrl && settings.rpLlmUrl.trim()) {
+        configPayload.rp_llm_url = settings.rpLlmUrl.trim();
+    }
+    if (settings.instructLlmUrl && settings.instructLlmUrl.trim()) {
+        configPayload.instruct_llm_url = settings.instructLlmUrl.trim();
+    }
 
     try {
         const resp = await fetch(`${origin}/api/config`, {
@@ -179,7 +186,7 @@ async function syncConfigToAgent(settings) {
 
         if (resp.ok) {
             configSynced = true;
-            console.log(`[${EXTENSION_NAME}] Config synced to Agent.`);
+            console.log(`[${EXTENSION_NAME}] Config synced to Agent.`, Object.keys(configPayload));
         } else {
             console.warn(`[${EXTENSION_NAME}] Agent config sync returned ${resp.status}. Will retry.`);
         }
@@ -525,13 +532,19 @@ function injectCharConfigButton() {
 
         try {
             const configPayload = {
-                rp_llm_url: settings.rpLlmUrl,
-                instruct_llm_url: settings.instructLlmUrl,
                 rp_template: settings.rpTemplate,
                 instruct_template: settings.instructTemplate,
                 thinking_steps: settings.thinkingSteps,
                 refinement_steps: settings.refinementSteps,
             };
+
+            // Only include URL fields if they have actual values
+            if (settings.rpLlmUrl && settings.rpLlmUrl.trim()) {
+                configPayload.rp_llm_url = settings.rpLlmUrl.trim();
+            }
+            if (settings.instructLlmUrl && settings.instructLlmUrl.trim()) {
+                configPayload.instruct_llm_url = settings.instructLlmUrl.trim();
+            }
 
             const resp = await fetch(`${origin}/api/config`, {
                 method: 'POST',
@@ -965,11 +978,40 @@ async function proactiveChatChanged() {
             : null;
 
         if (!chatId) {
-            console.log(`[${EXTENSION_NAME}] Chat changed but no chat ID - skipping proactive setup`);
+            // ST may not have the chat ID ready immediately after a
+            // chat-changed event.  Retry a few times with a short delay
+            // before giving up.
+            console.log(`[${EXTENSION_NAME}] No chat ID yet, retrying...`);
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const retryId = typeof context.getCurrentChatId === 'function'
+                    ? context.getCurrentChatId()
+                    : null;
+                if (retryId) {
+                    console.log(`[${EXTENSION_NAME}] Got chat ID on retry ${attempt}: ${retryId}`);
+                    return proactiveChatChangedWithId(origin, retryId);
+                }
+            }
+            console.log(`[${EXTENSION_NAME}] No chat ID after retries - skipping proactive setup`);
             updateStatus('No chat ID', '#f0ad4e');
             return;
         }
 
+        return proactiveChatChangedWithId(origin, chatId);
+
+    } catch (err) {
+        console.error(`[${EXTENSION_NAME}] Proactive chat-changed error:`, err);
+        updateStatus('Chat setup failed', '#d9534f');
+    } finally {
+        proactiveInProgress = false;
+    }
+}
+
+/**
+ * Continue proactive session setup now that we have a valid chatId.
+ */
+async function proactiveChatChangedWithId(origin, chatId) {
+    try {
         // Step 2: Check if local metadata already has a session for this chat
         const existingSessionId = context.chatMetadata?.[META_KEY_SESSION];
 
