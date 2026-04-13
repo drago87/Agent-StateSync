@@ -1374,58 +1374,84 @@ async function ensureSession(backendOrigin) {
  * Send character card + persona data to the Agent for initial world-state parsing.
  * In group mode, sends all group members instead of a single character.
  */
-async function initSession(backendOrigin, sessionId) {
+/**
+ * Send character card + persona data to the Agent for initial world-state parsing.
+ * In group mode, sends group name and all resolved member names.
+ */
+async function initSession(backendUrl, sessionId) {
     console.log(`[${EXTENSION_NAME}] Initializing session ${sessionId} with character data...`);
     updateStatus('Initializing session...', '#f0ad4e');
 
     try {
-        let initPayload;
+        // Group data should already be loaded by proactiveChatChanged() or ensureSession().
+        // Use the cached module-level variables (isGroupChat, activeGroup, activeGroupCharacters).
+        const isGroup = isGroupChat;
+        const group = activeGroup;
+        const groupChars = activeGroupCharacters;
 
-        if (isGroupChat && activeGroupCharacters.length > 0) {
-            // Group mode: send all member character cards
-            const members = activeGroupCharacters
-                .filter(c => !c._unresolved)
-                .map(c => ({
-                    name: c.name,
-                    description: c.description || '',
-                    personality: c.personality || '',
-                    scenario: c.scenario || '',
-                    first_mes: c.first_mes || '',
-                    mes_example: c.mes_example || '',
-                }));
+        const charName = isGroup && group ? group.name : (context.name2 || '');
+        const charDescription = context.description || '';
+        const charPersonality = context.personality || '';
+        const charScenario = context.scenario || '';
+        const charFirstMes = context.first_mes || '';
+        const charMesExample = context.mes_example || '';
+        const personaName = context.name1 || '';
+        const personaDescription = context.personaDescription || '';
 
-            initPayload = {
-                group_name: activeGroup.name,
-                group_members: members,
-                persona_name: context.name1 || '',
-                persona_description: context.personaDescription || '',
-                is_group: true,
-            };
+        const isMultiChar = (charDescription + charScenario).toLowerCase().includes('{{char}}') ||
+                            (charDescription + charScenario).includes('character:');
 
-            console.log(`[${EXTENSION_NAME}] Group init: "${activeGroup.name}" with ${members.length} members`);
-        } else {
-            // Single character mode
-            initPayload = {
-                character_name: context.name2 || '',
-                character_description: context.description || '',
-                character_personality: context.personality || '',
-                character_scenario: context.scenario || '',
-                character_first_mes: context.first_mes || '',
-                character_mes_example: context.mes_example || '',
-                persona_name: context.name1 || '',
-                persona_description: context.personaDescription || '',
-                is_group: false,
-            };
+        const stChatId = typeof context.getCurrentChatId === 'function'
+            ? context.getCurrentChatId()
+            : null;
+
+        // Extract member names from Character objects (not avatar strings)
+        const memberNames = groupChars
+            .map(c => c.name || c.avatar.replace(/\.[^.]+$/, ''))
+            .filter(Boolean);
+
+        // Extract disabled member names
+        const disabledNames = [];
+        if (group && Array.isArray(group.disabled_member)) {
+            const allChars = context.characters || [];
+            for (const dm of group.disabled_member) {
+                const char = allChars.find(c => c.avatar === dm);
+                disabledNames.push(char ? char.name : dm.replace(/\.[^.]+$/, ''));
+            }
         }
 
-        const resp = await fetch(`${backendOrigin}/api/sessions/${sessionId}/init`, {
+        const initPayload = {
+            character_name: charName,
+            character_description: charDescription,
+            character_personality: charPersonality,
+            character_scenario: charScenario,
+            character_first_mes: charFirstMes,
+            character_mes_example: charMesExample,
+            persona_name: personaName,
+            persona_description: personaDescription,
+            mode: 'character',
+            multi_character: isMultiChar || memberNames.length > 0,
+            tracked_characters: '',
+            st_chat_id: stChatId || '',
+            // --- Group chat fields ---
+            is_group: isGroup,
+            group_id: group ? String(group.id) : '',
+            group_name: group ? group.name : '',
+            group_members: memberNames,
+            group_disabled_members: disabledNames,
+        };
+
+        console.log(`[${EXTENSION_NAME}] initSession: is_group=${isGroup}, name="${charName}", members=[${memberNames.join(', ')}]`);
+
+        // backendUrl is already a full origin (http://host:port), don't add http:// again
+        const resp = await fetch(`${backendUrl}/api/sessions/${sessionId}/init`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(initPayload),
         });
 
         if (resp.ok) {
-            console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized with character data.`);
+            console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized. st_chat_id=${stChatId}`);
             context.chatMetadata[META_KEY_INITIALIZED] = true;
             await context.saveMetadata();
             updateStatus('Session initialized', '#5cb85c');
@@ -1525,34 +1551,30 @@ function trimHistory(messages, maxConversationMessages) {
 /**
  * Build the [SYSTEM_META] tag with all per-request data.
  * In group mode, includes group_id and member names.
+ * Uses cached module-level variables (isGroupChat, activeGroup, activeGroupCharacters)
+ * so this can remain synchronous.
  */
 function buildMetaTag(sessionId, messageId, type, swipeIndex) {
     let tag = `[SYSTEM_META] session_id=${sessionId} message_id=${messageId} type=${type} swipe_index=${swipeIndex}`;
 
+    // Append group metadata if in a group chat
     if (isGroupChat && activeGroup) {
-        tag += ` group_id=${activeGroup.id} group_name=${activeGroup.name}`;
-
-        // Include member names for the Agent to know who is in the scene
         const memberNames = activeGroupCharacters
-            .filter(c => !c._unresolved)
-            .map(c => c.name)
-            .join(',');
-        if (memberNames) {
-            tag += ` members=${memberNames}`;
-        }
+            .map(c => c.name || c.avatar.replace(/\.[^.]+$/, ''))
+            .filter(Boolean);
+        const membersStr = memberNames.join(',');
 
-        // Include disabled members so Agent knows who is muted
-        if (Array.isArray(activeGroup.disabled_members) && activeGroup.disabled_members.length > 0) {
-            const disabledNames = activeGroup.disabled_members
-                .map(avatar => {
-                    const char = activeGroupCharacters.find(c => c.avatar === avatar);
-                    return char ? char.name : avatar;
-                })
-                .filter(n => n)
-                .join(',');
-            if (disabledNames) {
-                tag += ` disabled_members=${disabledNames}`;
-            }
+        tag += ` group_id=${encodeURIComponent(String(activeGroup.id))}`;
+        tag += ` group_name=${encodeURIComponent(activeGroup.name || '')}`;
+        tag += ` members=${encodeURIComponent(membersStr)}`;
+
+        if (Array.isArray(activeGroup.disabled_member) && activeGroup.disabled_member.length > 0) {
+            const allChars = context.characters || [];
+            const disabledNames = activeGroup.disabled_member.map(dm => {
+                const char = allChars.find(c => c.avatar === dm);
+                return char ? char.name : dm.replace(/\.[^.]+$/, '');
+            });
+            tag += ` disabled_members=${encodeURIComponent(disabledNames.join(','))}`;
         }
     }
 
