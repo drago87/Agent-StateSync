@@ -237,6 +237,9 @@ async function checkAgentHealth() {
             // Also ping the dashboard so the ST Extension light stays green
             pingAgent(url);
 
+            // Check LLM backend status (fire-and-forget, don't block health check)
+            checkLlmStatuses();
+
             return true;
         } else {
             setConnectionStatus(false, `Agent returned ${resp.status}`);
@@ -249,6 +252,68 @@ async function checkAgentHealth() {
             setConnectionStatus(false, 'Agent not reachable');
         }
         return false;
+    }
+}
+
+/**
+ * Check if an LLM backend is reachable by hitting its /v1/models endpoint.
+ * The URL should be a host:port string like "192.168.0.1:5001".
+ * Returns true if the endpoint responds within the timeout.
+ */
+async function probeLlmEndpoint(hostPort) {
+    if (!hostPort || !hostPort.trim()) return false;
+    const url = `http://${hostPort.trim()}/v1/models`;
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
+        const resp = await fetch(url, { method: 'GET', signal: controller.signal });
+        clearTimeout(timeoutId);
+        return resp.ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * Update the LLM status dots in the extension settings panel.
+ * Called during each health check cycle.
+ */
+async function checkLlmStatuses() {
+    const settings = getSettings();
+    if (!settings.enabled) return;
+
+    // Probe RP LLM
+    const rpOk = await probeLlmEndpoint(settings.rpLlmUrl);
+    const rpDot = $('#ass-rp-dot');
+    if (rpDot.length) {
+        rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
+        if (!settings.rpLlmUrl || !settings.rpLlmUrl.trim()) {
+            rpDot.addClass('ass-llm-dot-off');
+            rpDot.attr('title', 'RP LLM: no URL set');
+        } else if (rpOk) {
+            rpDot.addClass('ass-llm-dot-green');
+            rpDot.attr('title', `RP LLM: online (${settings.rpLlmUrl})`);
+        } else {
+            rpDot.addClass('ass-llm-dot-red');
+            rpDot.attr('title', `RP LLM: offline (${settings.rpLlmUrl})`);
+        }
+    }
+
+    // Probe Instruct LLM
+    const instructOk = await probeLlmEndpoint(settings.instructLlmUrl);
+    const instructDot = $('#ass-instruct-dot');
+    if (instructDot.length) {
+        instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
+        if (!settings.instructLlmUrl || !settings.instructLlmUrl.trim()) {
+            instructDot.addClass('ass-llm-dot-off');
+            instructDot.attr('title', 'Instruct LLM: no URL set');
+        } else if (instructOk) {
+            instructDot.addClass('ass-llm-dot-green');
+            instructDot.attr('title', `Instruct LLM: online (${settings.instructLlmUrl})`);
+        } else {
+            instructDot.addClass('ass-llm-dot-red');
+            instructDot.attr('title', `Instruct LLM: offline (${settings.instructLlmUrl})`);
+        }
     }
 }
 
@@ -665,6 +730,36 @@ function injectCustomCSS() {
             font-size: 11px;
             white-space: nowrap;
         }
+
+        /* Small LLM status dot next to input fields */
+        .ass-llm-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .ass-llm-row .text_pole {
+            flex: 1;
+        }
+        .ass-llm-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            transition: background-color 0.3s, box-shadow 0.3s;
+        }
+        .ass-llm-dot-green {
+            background-color: #5cb85c;
+            box-shadow: 0 0 4px 1px rgba(92, 184, 92, 0.5);
+        }
+        .ass-llm-dot-red {
+            background-color: #d9534f;
+            box-shadow: 0 0 4px 1px rgba(217, 83, 79, 0.4);
+        }
+        .ass-llm-dot-off {
+            background-color: #555;
+            box-shadow: none;
+        }
     </style>`;
 
     $('head').append(css);
@@ -716,7 +811,10 @@ function renderSettingsUI() {
                     <label class="title_restorable">
                         <small><b>RP LLM IP:Port</b> (Creative Writer)</small>
                     </label>
-                    <input type="text" id="ass-rp-url" class="text_pole wide" placeholder="192.168.0.1:5001">
+                    <div class="ass-llm-row">
+                        <input type="text" id="ass-rp-url" class="text_pole wide" placeholder="192.168.0.1:5001">
+                        <span id="ass-rp-dot" class="ass-llm-dot ass-llm-dot-off" title="RP LLM: not checked"></span>
+                    </div>
                     <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Runs the creative model for narrative generation.</small>
                 </div>
 
@@ -735,7 +833,10 @@ function renderSettingsUI() {
                     <label class="title_restorable">
                         <small><b>Instruct LLM IP:Port</b> (Data Logger)</small>
                     </label>
-                    <input type="text" id="ass-instruct-url" class="text_pole wide" placeholder="192.168.0.1:11434">
+                    <div class="ass-llm-row">
+                        <input type="text" id="ass-instruct-url" class="text_pole wide" placeholder="192.168.0.1:11434">
+                        <span id="ass-instruct-dot" class="ass-llm-dot ass-llm-dot-off" title="Instruct LLM: not checked"></span>
+                    </div>
                     <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Runs a smaller model for JSON state extraction.</small>
                 </div>
 
