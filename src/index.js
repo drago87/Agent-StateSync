@@ -1012,6 +1012,21 @@ async function proactiveChatChanged() {
  */
 async function proactiveChatChangedWithId(origin, chatId) {
     try {
+        // Pre-flight: check if Agent is reachable before doing anything.
+        // If the Agent isn't up yet, the lazy fallback (ensureSession in
+        // the fetch interceptor) will handle session creation later.
+        try {
+            const healthResp = await fetch(`${origin}/health`, {
+                method: 'GET',
+                signal: AbortSignal.timeout(3000),
+            });
+            if (!healthResp.ok) throw new Error(`Agent returned ${healthResp.status}`);
+        } catch (e) {
+            console.log(`[${EXTENSION_NAME}] Agent not reachable yet, deferring session setup to first request`);
+            updateStatus('Waiting for Agent...', '#f0ad4e');
+            return;
+        }
+
         // Step 2: Check if local metadata already has a session for this chat
         const existingSessionId = context.chatMetadata?.[META_KEY_SESSION];
 
