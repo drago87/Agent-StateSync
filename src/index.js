@@ -441,28 +441,106 @@ async function fetchGroupsFromServer() {
 /**
  * Find the currently active group by matching chat_id against
  * the current chat ID from ST's context.
+ *
+ * Match priority:
+ *  1. context.group_id  vs  group.id        (most reliable in group mode)
+ *  2. getCurrentChatId() vs group.chat_id   (current active chat)
+ *  3. getCurrentChatId() vs group.id         (unlikely but possible)
+ *  4. getCurrentChatId() in group.chats[]    (historical chats)
+ *  5. Fallback: context.name2 === 'SillyTavern System' heuristic
  */
 function findActiveGroup(groups) {
+    if (!groups || groups.length === 0) {
+        console.log(`[${EXTENSION_NAME}] findActiveGroup: no groups loaded`);
+        return null;
+    }
+
     const currentChatId = typeof context.getCurrentChatId === 'function'
         ? context.getCurrentChatId()
         : null;
 
-    if (!currentChatId || !groups) return null;
+    // ST sets context.group_id when viewing a group chat.
+    // This is the most reliable signal — use it first.
+    const currentGroupId = context.group_id || context.chat?.group_id || null;
 
-    // Direct match on chat_id
-    for (const group of groups) {
-        if (group.chat_id === currentChatId || group.id === currentChatId) {
-            return group;
+    console.log(`[${EXTENSION_NAME}] findActiveGroup: chatId=${currentChatId}, groupId=${currentGroupId}, name2="${context.name2 || ''}"`);
+
+    // Log each group for diagnosis (only first 20 to avoid spam)
+    const logGroups = groups.slice(0, 20);
+    for (const group of logGroups) {
+        const chatsPreview = Array.isArray(group.chats)
+            ? `[${group.chats.length} chats, first=${group.chats[0] || 'none'}]`
+            : 'no chats array';
+        console.log(`[${EXTENSION_NAME}]   Group "${group.name}": id=${group.id}, chat_id=${group.chat_id}, ${chatsPreview}`);
+    }
+
+    // --- Match 1: group.id === context.group_id (most reliable) ---
+    if (currentGroupId) {
+        for (const group of groups) {
+            if (group.id === currentGroupId) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED by context.group_id === group.id`);
+                return group;
+            }
+        }
+        console.warn(`[${EXTENSION_NAME}]   context.group_id=${currentGroupId} did not match any group.id`);
+    }
+
+    // --- Match 2 & 3: group.chat_id or group.id === currentChatId ---
+    if (currentChatId) {
+        for (const group of groups) {
+            if (group.chat_id === currentChatId) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED by group.chat_id`);
+                return group;
+            }
+        }
+        for (const group of groups) {
+            if (group.id === currentChatId) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED by group.id`);
+                return group;
+            }
+        }
+
+        // --- Match 4: currentChatId in group.chats[] ---
+        for (const group of groups) {
+            if (Array.isArray(group.chats) && group.chats.includes(currentChatId)) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED by group.chats[]`);
+                return group;
+            }
         }
     }
 
-    // Also check if currentChatId is in the group's chats array
-    for (const group of groups) {
-        if (Array.isArray(group.chats) && group.chats.includes(currentChatId)) {
-            return group;
+    // --- Fallback: 'SillyTavern System' heuristic ---
+    // In ST, context.name2 is set to 'SillyTavern System' when viewing a
+    // group chat (it's ST's default group persona).  If we see this but
+    // couldn't match by ID, we know we're in a group — try harder.
+    if (context.name2 === 'SillyTavern System') {
+        console.warn(`[${EXTENSION_NAME}]   -> FALLBACK: name2='SillyTavern System' but no ID match found`);
+
+        // If context.group_id exists, we already tried it above and failed.
+        // Try matching by looking for the group whose chat_id matches
+        // whatever the "current" chat ID is reported as.
+        if (currentGroupId && !currentChatId) {
+            // We have a group_id but no chat_id — match was already attempted
+            console.warn(`[${EXTENSION_NAME}]   -> Have group_id=${currentGroupId} but no chat_id; group ID not found in list`);
+        }
+
+        // Last resort: use the first group that has a chat_id set.
+        // This is a heuristic — it might be wrong if the user has multiple
+        // groups, but it's better than returning null.
+        for (const group of groups) {
+            if (group.chat_id) {
+                console.warn(`[${EXTENSION_NAME}]   -> Using first group with chat_id: "${group.name}" (MAY BE WRONG — check console)`);
+                return group;
+            }
+        }
+        // Even more desperate: return the first group
+        if (groups.length === 1) {
+            console.warn(`[${EXTENSION_NAME}]   -> Only 1 group exists, using it: "${groups[0].name}"`);
+            return groups[0];
         }
     }
 
+    console.log(`[${EXTENSION_NAME}]   -> NO MATCH FOUND`);
     return null;
 }
 
@@ -1374,84 +1452,58 @@ async function ensureSession(backendOrigin) {
  * Send character card + persona data to the Agent for initial world-state parsing.
  * In group mode, sends all group members instead of a single character.
  */
-/**
- * Send character card + persona data to the Agent for initial world-state parsing.
- * In group mode, sends group name and all resolved member names.
- */
-async function initSession(backendUrl, sessionId) {
+async function initSession(backendOrigin, sessionId) {
     console.log(`[${EXTENSION_NAME}] Initializing session ${sessionId} with character data...`);
     updateStatus('Initializing session...', '#f0ad4e');
 
     try {
-        // Group data should already be loaded by proactiveChatChanged() or ensureSession().
-        // Use the cached module-level variables (isGroupChat, activeGroup, activeGroupCharacters).
-        const isGroup = isGroupChat;
-        const group = activeGroup;
-        const groupChars = activeGroupCharacters;
+        let initPayload;
 
-        const charName = isGroup && group ? group.name : (context.name2 || '');
-        const charDescription = context.description || '';
-        const charPersonality = context.personality || '';
-        const charScenario = context.scenario || '';
-        const charFirstMes = context.first_mes || '';
-        const charMesExample = context.mes_example || '';
-        const personaName = context.name1 || '';
-        const personaDescription = context.personaDescription || '';
+        if (isGroupChat && activeGroupCharacters.length > 0) {
+            // Group mode: send all member character cards
+            const members = activeGroupCharacters
+                .filter(c => !c._unresolved)
+                .map(c => ({
+                    name: c.name,
+                    description: c.description || '',
+                    personality: c.personality || '',
+                    scenario: c.scenario || '',
+                    first_mes: c.first_mes || '',
+                    mes_example: c.mes_example || '',
+                }));
 
-        const isMultiChar = (charDescription + charScenario).toLowerCase().includes('{{char}}') ||
-                            (charDescription + charScenario).includes('character:');
+            initPayload = {
+                group_name: activeGroup.name,
+                group_members: members,
+                persona_name: context.name1 || '',
+                persona_description: context.personaDescription || '',
+                is_group: true,
+            };
 
-        const stChatId = typeof context.getCurrentChatId === 'function'
-            ? context.getCurrentChatId()
-            : null;
-
-        // Extract member names from Character objects (not avatar strings)
-        const memberNames = groupChars
-            .map(c => c.name || c.avatar.replace(/\.[^.]+$/, ''))
-            .filter(Boolean);
-
-        // Extract disabled member names
-        const disabledNames = [];
-        if (group && Array.isArray(group.disabled_member)) {
-            const allChars = context.characters || [];
-            for (const dm of group.disabled_member) {
-                const char = allChars.find(c => c.avatar === dm);
-                disabledNames.push(char ? char.name : dm.replace(/\.[^.]+$/, ''));
-            }
+            console.log(`[${EXTENSION_NAME}] Group init: "${activeGroup.name}" with ${members.length} members`);
+        } else {
+            // Single character mode
+            initPayload = {
+                character_name: context.name2 || '',
+                character_description: context.description || '',
+                character_personality: context.personality || '',
+                character_scenario: context.scenario || '',
+                character_first_mes: context.first_mes || '',
+                character_mes_example: context.mes_example || '',
+                persona_name: context.name1 || '',
+                persona_description: context.personaDescription || '',
+                is_group: false,
+            };
         }
 
-        const initPayload = {
-            character_name: charName,
-            character_description: charDescription,
-            character_personality: charPersonality,
-            character_scenario: charScenario,
-            character_first_mes: charFirstMes,
-            character_mes_example: charMesExample,
-            persona_name: personaName,
-            persona_description: personaDescription,
-            mode: 'character',
-            multi_character: isMultiChar || memberNames.length > 0,
-            tracked_characters: '',
-            st_chat_id: stChatId || '',
-            // --- Group chat fields ---
-            is_group: isGroup,
-            group_id: group ? String(group.id) : '',
-            group_name: group ? group.name : '',
-            group_members: memberNames,
-            group_disabled_members: disabledNames,
-        };
-
-        console.log(`[${EXTENSION_NAME}] initSession: is_group=${isGroup}, name="${charName}", members=[${memberNames.join(', ')}]`);
-
-        // backendUrl is already a full origin (http://host:port), don't add http:// again
-        const resp = await fetch(`${backendUrl}/api/sessions/${sessionId}/init`, {
+        const resp = await fetch(`${backendOrigin}/api/sessions/${sessionId}/init`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(initPayload),
         });
 
         if (resp.ok) {
-            console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized. st_chat_id=${stChatId}`);
+            console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized with character data.`);
             context.chatMetadata[META_KEY_INITIALIZED] = true;
             await context.saveMetadata();
             updateStatus('Session initialized', '#5cb85c');
@@ -1551,30 +1603,34 @@ function trimHistory(messages, maxConversationMessages) {
 /**
  * Build the [SYSTEM_META] tag with all per-request data.
  * In group mode, includes group_id and member names.
- * Uses cached module-level variables (isGroupChat, activeGroup, activeGroupCharacters)
- * so this can remain synchronous.
  */
 function buildMetaTag(sessionId, messageId, type, swipeIndex) {
     let tag = `[SYSTEM_META] session_id=${sessionId} message_id=${messageId} type=${type} swipe_index=${swipeIndex}`;
 
-    // Append group metadata if in a group chat
     if (isGroupChat && activeGroup) {
+        tag += ` group_id=${activeGroup.id} group_name=${activeGroup.name}`;
+
+        // Include member names for the Agent to know who is in the scene
         const memberNames = activeGroupCharacters
-            .map(c => c.name || c.avatar.replace(/\.[^.]+$/, ''))
-            .filter(Boolean);
-        const membersStr = memberNames.join(',');
+            .filter(c => !c._unresolved)
+            .map(c => c.name)
+            .join(',');
+        if (memberNames) {
+            tag += ` members=${memberNames}`;
+        }
 
-        tag += ` group_id=${encodeURIComponent(String(activeGroup.id))}`;
-        tag += ` group_name=${encodeURIComponent(activeGroup.name || '')}`;
-        tag += ` members=${encodeURIComponent(membersStr)}`;
-
-        if (Array.isArray(activeGroup.disabled_member) && activeGroup.disabled_member.length > 0) {
-            const allChars = context.characters || [];
-            const disabledNames = activeGroup.disabled_member.map(dm => {
-                const char = allChars.find(c => c.avatar === dm);
-                return char ? char.name : dm.replace(/\.[^.]+$/, '');
-            });
-            tag += ` disabled_members=${encodeURIComponent(disabledNames.join(','))}`;
+        // Include disabled members so Agent knows who is muted
+        if (Array.isArray(activeGroup.disabled_members) && activeGroup.disabled_members.length > 0) {
+            const disabledNames = activeGroup.disabled_members
+                .map(avatar => {
+                    const char = activeGroupCharacters.find(c => c.avatar === avatar);
+                    return char ? char.name : avatar;
+                })
+                .filter(n => n)
+                .join(',');
+            if (disabledNames) {
+                tag += ` disabled_members=${disabledNames}`;
+            }
         }
     }
 
