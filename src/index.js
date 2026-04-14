@@ -2,9 +2,10 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.7 — Phase 1: LLM status indicators now ask the Agent instead of
-//          probing backends directly from the browser. This fixes "no URL set"
-//          when URLs are configured in config.ini rather than the extension.
+// v2.8 — Added debug panel + bypass mode (dummy responses instead of
+//          connecting to Agent). No actual Agent calls are made when
+//          bypass mode is enabled; all data that would be sent is
+//          output to the debug console and interceptor log.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -48,6 +49,7 @@ const HEALTH_CHECK_TIMEOUT_MS = 5000;   // 5 second timeout per check
 
 const defaultSettings = {
     enabled: false,
+    bypassMode: true,          // When true, don't connect to Agent — return dummy responses
     rpLlmUrl: '192.168.0.1:5001',
     instructLlmUrl: '192.168.0.1:11434',
     rpTemplate: 'chatml',
@@ -56,6 +58,20 @@ const defaultSettings = {
     refinementSteps: 0,
     historyCount: 2,
 };
+
+// Debug command definitions for the debug panel dropdown
+const DEBUG_COMMANDS = [
+    { value: '', label: '-- Select debug command --' },
+    { value: 'context_dump', label: 'Dump ST Context' },
+    { value: 'chat_ids', label: 'Chat ID & Group ID' },
+    { value: 'load_groups', label: 'Load & Dump Groups' },
+    { value: 'find_group', label: 'Find Active Group' },
+    { value: 'group_members', label: 'Group Members' },
+    { value: 'preview_meta', label: 'Preview SYSTEM_META' },
+    { value: 'init_payload', label: 'Preview Init Payload' },
+    { value: 'session_lookup', label: 'Session Metadata' },
+    { value: 'last_intercept', label: 'Last Intercepted Request' },
+];
 
 // #############################################
 // # 2. State Variables (not persisted)
@@ -81,6 +97,9 @@ let isGroupChat = false;           // Whether the current chat is a group chat
 
 // Proactive session tracking
 let proactiveInProgress = false;   // Prevents overlapping proactive calls
+
+// Interceptor log — stores the last intercepted request data for debug display
+let lastInterceptLog = null;
 
 // #############################################
 // # 3. Agent URL Resolution (Auto-Detect)
@@ -141,7 +160,16 @@ function getAgentHostPort() {
 
 function getSettings() {
     const stored = context.extensionSettings[SETTINGS_KEY];
-    return { ...defaultSettings, ...(stored || {}) };
+    const merged = { ...defaultSettings, ...(stored || {}) };
+    // Bypass mode should default to true if the key doesn't exist yet (new installs)
+    if (stored && stored.bypassMode === undefined) {
+        merged.bypassMode = true;
+    }
+    return merged;
+}
+
+function isBypassMode() {
+    return getSettings().bypassMode;
 }
 
 function saveSettings(settings) {
@@ -154,6 +182,18 @@ function saveSettings(settings) {
  */
 async function syncConfigToAgent(settings) {
     if (!settings.enabled) return;
+    if (isBypassMode()) {
+        console.log(`[${EXTENSION_NAME}] [BYPASS] Config sync skipped (bypass mode). Would have sent:`, {
+            rp_template: settings.rpTemplate,
+            instruct_template: settings.instructTemplate,
+            thinking_steps: settings.thinkingSteps,
+            refinement_steps: settings.refinementSteps,
+            rp_llm_url: settings.rpLlmUrl || '(not set)',
+            instruct_llm_url: settings.instructLlmUrl || '(not set)',
+        });
+        configSynced = true;
+        return;
+    }
 
     const origin = getAgentOrigin();
     if (!origin) {
@@ -219,6 +259,12 @@ async function checkAgentHealth() {
     const url = getHealthCheckUrl();
     if (!url) return false;
 
+    if (isBypassMode()) {
+        setConnectionStatus(true, 'Bypass mode (no Agent)');
+        console.log(`[${EXTENSION_NAME}] [BYPASS] Health check skipped — bypass mode active`);
+        return true;
+    }
+
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
@@ -264,6 +310,11 @@ async function checkAgentHealth() {
 async function checkLlmStatuses() {
     const origin = getAgentOrigin();
     if (!origin) return;
+
+    if (isBypassMode()) {
+        console.log(`[${EXTENSION_NAME}] [BYPASS] LLM status check skipped`);
+        return;
+    }
 
     try {
         const controller = new AbortController();
@@ -320,6 +371,7 @@ async function checkLlmStatuses() {
 async function pingAgent(healthUrl) {
     const origin = getAgentOrigin();
     if (!origin) return;
+    if (isBypassMode()) return;
     try {
         await fetch(`${origin}/api/ping`, { method: 'POST' });
     } catch (e) {
@@ -626,7 +678,35 @@ async function loadGroupData() {
 }
 
 // #############################################
-// # 7. Character Config Button (Action Bar)
+// # 8. Dummy Response (Bypass Mode)
+// #############################################
+
+/**
+ * Creates a fake Response object that mimics an OpenAI-compatible
+ * chat completion streaming response. SillyTavern expects SSE format.
+ */
+function createDummyResponse() {
+    const dummyContent = '[Agent-StateSync BYPASS MODE — no actual LLM call was made. Check browser console (F12) for the full intercepted request data.]';
+
+    // Build a minimal SSE stream body
+    const sseBody = [
+        `data: ${JSON.stringify({ id: 'bypass-fake-id', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'bypass-model', choices: [{ index: 0, delta: { role: 'assistant', content: dummyContent }, finish_reason: null }] })}\n\n`,
+        `data: ${JSON.stringify({ id: 'bypass-fake-id', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'bypass-model', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+        'data: [DONE]\n\n',
+    ].join('');
+
+    return new Response(sseBody, {
+        status: 200,
+        headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        },
+    });
+}
+
+// #############################################
+// # 9. Character Config Button (Action Bar)
 // #############################################
 
 /**
@@ -705,7 +785,7 @@ function injectCharConfigButton() {
 }
 
 // #############################################
-// # 8. UI Rendering
+// # 10. UI Rendering
 // #############################################
 
 function buildOptions(items, selectedValue) {
@@ -970,6 +1050,37 @@ function renderSettingsUI() {
                     </small>
                 </div>
 
+                <hr class="sysHR">
+
+                <!-- Bypass Mode -->
+                <div class="ass-enable-row margin-bot-10">
+                    <label class="checkbox_label" for="ass-bypass-toggle">
+                        <input type="checkbox" id="ass-bypass-toggle">
+                        <span>Bypass Mode (no Agent)</span>
+                    </label>
+                </div>
+                <small style="color: var(--fg_dim); margin-bottom: 10px; display: block;">
+                    When enabled, the extension intercepts requests but returns dummy responses instead of connecting to the Agent. All data that would have been sent is logged to the browser console (F12). Use this for debugging group matching and metadata issues.
+                </small>
+
+                <hr class="sysHR">
+
+                <!-- Debug Panel -->
+                <div class="margin-bot-10">
+                    <label class="title_restorable">
+                        <small><b>Debug Tools</b></small>
+                    </label>
+                    <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+                        <select id="ass-debug-cmd" class="text_pole" style="flex:1;">
+                            ${DEBUG_COMMANDS.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}
+                        </select>
+                        <button id="ass-debug-run" class="menu_button" type="button" style="white-space:nowrap;">
+                            <i class="fa-solid fa-play"></i> Run
+                        </button>
+                    </div>
+                    <textarea id="ass-debug-output" class="text_pole" style="width:100%; height:220px; font-family:monospace; font-size:11px; resize:vertical; overflow:auto; white-space:pre;" readonly placeholder="Debug output will appear here...\n\nTip: Run \"Chat ID & Group ID\" first, then \"Load & Dump Groups\", then \"Find Active Group\" to diagnose group matching."></textarea>
+                </div>
+
             </div>
         </div>
     </div>`;
@@ -1060,6 +1171,46 @@ function renderSettingsUI() {
     // --- Reconnect button ---
     $('#ass-reconnect-btn').on('click', handleReconnect);
 
+    // --- Bypass mode toggle ---
+    $('#ass-bypass-toggle').prop('checked', s.bypassMode);
+    $('#ass-bypass-toggle').on('change', function () {
+        const settings = getSettings();
+        settings.bypassMode = $(this).prop('checked');
+        saveSettings(settings);
+        console.log(`[${EXTENSION_NAME}] Bypass mode: ${settings.bypassMode ? 'ON' : 'OFF'}`);
+        if (settings.bypassMode) {
+            setConnectionStatus(true, 'Bypass mode (no Agent)');
+            updateStatus('Bypass mode', '#5bc0de');
+            stopHealthChecks();
+        } else {
+            setConnectionStatus(false, 'Agent not reachable');
+            updateStatus('Idle', 'var(--fg_dim)');
+            if (settings.enabled) {
+                startHealthChecks();
+            }
+        }
+    });
+
+    // --- Debug panel ---
+    $('#ass-debug-run').on('click', async function () {
+        const cmd = $('#ass-debug-cmd').val();
+        if (!cmd) {
+            setDebugOutput('Select a debug command from the dropdown first.');
+            return;
+        }
+        const $btn = $(this);
+        $btn.prop('disabled', true);
+        setDebugOutput('Running...');
+        try {
+            const output = await executeDebugCommand(cmd);
+            setDebugOutput(output);
+        } catch (err) {
+            setDebugOutput(`Error: ${err.message}\n${err.stack || ''}`);
+        } finally {
+            $btn.prop('disabled', false);
+        }
+    });
+
     // --- Start health checks if extension is already enabled ---
     if (s.enabled) {
         startHealthChecks();
@@ -1083,7 +1234,7 @@ function refreshAgentUrlDisplay() {
 }
 
 // #############################################
-// # 9. Utility Functions
+// # 11. Utility Functions
 // #############################################
 
 /**
@@ -1109,8 +1260,304 @@ function updateStatus(text, color) {
     }
 }
 
+/**
+ * Write text to the debug output textbox.
+ */
+function setDebugOutput(text) {
+    const $box = $('#ass-debug-output');
+    if ($box.length) {
+        $box.val(text);
+        // Auto-scroll to top
+        $box.scrollTop(0);
+    }
+}
+
 // #############################################
-// # 10. Proactive Chat-Changed Hook (Phase 1)
+// # 12. Debug Command Handlers
+// #############################################
+
+/**
+ * Execute a debug command and return its output as a string.
+ */
+async function executeDebugCommand(command) {
+    if (!command) return '(No command selected)';
+
+    const lines = [];
+    const add = (str) => lines.push(str);
+    const sep = () => add('────────────────────────────────────────');
+
+    try {
+        switch (command) {
+
+            case 'context_dump': {
+                add('=== SillyTavern Context Dump ===');
+                add('');
+                add(`context.groupId (selected_group): ${context.groupId ?? 'null (NOT SET)'}`);
+                add(`context.chatId (computed):       ${context.chatId ?? 'null (NOT SET)'}`);
+                add(`context.characterId (this_chid): ${context.characterId ?? 'null'}`);
+                add(`context.name1 (persona):         ${context.name1 ?? '(empty)'}`);
+                add(`context.name2 (character/group):  ${context.name2 ?? '(empty)'}`);
+                add(`context.onlineStatus:            ${context.onlineStatus ?? 'null'}`);
+                add(`context.maxContext:               ${context.maxContext}`);
+                add('');
+                add('--- getCurrentChatId() ---');
+                const chatId = typeof context.getCurrentChatId === 'function'
+                    ? context.getCurrentChatId() : 'FUNCTION NOT AVAILABLE';
+                add(`getCurrentChatId() => ${chatId}`);
+                add('');
+                add('--- chatMetadata ---');
+                add(JSON.stringify(context.chatMetadata || {}, null, 2));
+                add('');
+                add('--- chat array length ---');
+                const chatArr = context.chat || [];
+                add(`context.chat.length = ${Array.isArray(chatArr) ? chatArr.length : '(not array)'}`);
+                break;
+            }
+
+            case 'chat_ids': {
+                add('=== Chat ID & Group ID Analysis ===');
+                add('');
+                const chatId = typeof context.getCurrentChatId === 'function'
+                    ? context.getCurrentChatId() : null;
+                const groupId = context.groupId || null;
+                const computedChatId = context.chatId || null;
+
+                add(`getCurrentChatId():  ${chatId}`);
+                add(`context.groupId:    ${groupId}`);
+                add(`context.chatId:     ${computedChatId}`);
+                add(`context.name2:      "${context.name2 || ''}"`);
+                add('');
+                add('--- How ST computes context.chatId (from st-context.js) ---');
+                add('For groups:   groups.find(x => x.id == selected_group)?.chat_id');
+                add('For single:   characters[this_chid]?.chat');
+                add('');
+                add('--- Diagnostic ---');
+                if (groupId) {
+                    add('You ARE in a group (context.groupId is set).');
+                    add(`  Expected: group.chat_id should equal getCurrentChatId()`);
+                    if (cachedGroups) {
+                        const g = cachedGroups.find(x => x.id === groupId);
+                        if (g) {
+                            add(`  Found group: "${g.name}" (id=${g.id})`);
+                            add(`  group.chat_id = "${g.chat_id}"`);
+                            add(`  Match: ${g.chat_id === chatId ? 'YES' : 'NO — THIS IS THE BUG'}`);
+                            if (g.chats && g.chats.length) {
+                                add(`  group.chats[] = [${g.chats.length} items]`);
+                                add(`    Last (current): "${g.chats[g.chats.length - 1]}"`);
+                                add(`    chatId in chats[]: ${g.chats.includes(chatId) ? 'YES' : 'NO'}`);
+                            }
+                        } else {
+                            add(`  Group id=${groupId} NOT FOUND in cached groups!`);
+                        }
+                    } else {
+                        add('  Groups not loaded yet. Run "Load & Dump Groups" first.');
+                    }
+                } else {
+                    add('You are NOT in a group (context.groupId is null/undefined).');
+                    add('Single character mode.');
+                }
+                break;
+            }
+
+            case 'load_groups': {
+                add('=== Loading Groups from ST Server ===');
+                add('(Calling POST /api/groups/all with auth headers)');
+                add('');
+                const groups = await fetchGroupsFromServer();
+                cachedGroups = groups;
+                add(`Loaded ${groups.length} groups`);
+                add('');
+                for (let i = 0; i < groups.length; i++) {
+                    const g = groups[i];
+                    const chatsPreview = Array.isArray(g.chats)
+                        ? `[${g.chats.length} chats, last="${g.chats[g.chats.length - 1] || 'none'}"]`
+                        : 'no chats array';
+                    add(`[${i}] "${g.name}"`);
+                    add(`    id=${g.id}  chat_id="${g.chat_id}"`);
+                    add(`    members=${JSON.stringify(g.members || [])}`);
+                    add(`    disabled_members=${JSON.stringify(g.disabled_members || [])}`);
+                    add(`    ${chatsPreview}`);
+                }
+                break;
+            }
+
+            case 'find_group': {
+                add('=== Finding Active Group ===');
+                add('');
+                if (!cachedGroups) {
+                    add('Groups not loaded yet. Run "Load & Dump Groups" first.');
+                    break;
+                }
+                add(`cachedGroups: ${cachedGroups.length} groups loaded`);
+                const currentChatId = typeof context.getCurrentChatId === 'function'
+                    ? context.getCurrentChatId() : null;
+                const currentGroupId = context.groupId || null;
+                add(`Input: chatId=${currentChatId}, groupId=${currentGroupId}`);
+                add('');
+
+                const found = findActiveGroup(cachedGroups);
+                if (found) {
+                    add(`RESULT: Matched group "${found.name}"`);
+                    add(`  id=${found.id}`);
+                    add(`  chat_id="${found.chat_id}"`);
+                    add(`  members=${JSON.stringify(found.members || [])}`);
+                    if (found.chats) {
+                        add(`  chats[${found.chats.length}]=${JSON.stringify(found.chats)}`);
+                    }
+                    add('');
+                    add(`isGroupChat = ${isGroupChat}`);
+                    add(`activeGroupCharacters.length = ${activeGroupCharacters.length}`);
+                } else {
+                    add('RESULT: NO MATCH FOUND — single character mode');
+                    add('');
+                    add('Check the console (F12) for the detailed matching log.');
+                    add('The findActiveGroup() function logs every step.');
+                }
+                break;
+            }
+
+            case 'group_members': {
+                add('=== Group Members ===');
+                add('');
+                if (!isGroupChat || !activeGroup) {
+                    add('Not in group mode. No active group.');
+                    break;
+                }
+                add(`Active group: "${activeGroup.name}" (id=${activeGroup.id})`);
+                add(`Resolved members: ${activeGroupCharacters.length}`);
+                add('');
+                for (let i = 0; i < activeGroupCharacters.length; i++) {
+                    const c = activeGroupCharacters[i];
+                    add(`[${i}] ${c.name || '(unnamed)'}`);
+                    add(`    avatar="${c.avatar || ''}"`);
+                    if (c._unresolved) {
+                        add('    *** UNRESOLVED — could not find full character data ***');
+                    } else {
+                        add(`    description: ${(c.description || '').substring(0, 100)}${(c.description || '').length > 100 ? '...' : ''}`);
+                        add(`    personality: ${(c.personality || '').substring(0, 80)}${(c.personality || '').length > 80 ? '...' : ''}`);
+                        add(`    scenario: ${(c.scenario || '').substring(0, 80)}${(c.scenario || '').length > 80 ? '...' : ''}`);
+                        add(`    first_mes: ${(c.first_mes || '').substring(0, 80)}${(c.first_mes || '').length > 80 ? '...' : ''}`);
+                    }
+                }
+                if (activeGroup.disabled_members && activeGroup.disabled_members.length) {
+                    add('');
+                    add(`Disabled members: ${JSON.stringify(activeGroup.disabled_members)}`);
+                }
+                break;
+            }
+
+            case 'preview_meta': {
+                add('=== SYSTEM_META Preview ===');
+                add('');
+                const fakeSessionId = context.chatMetadata?.[META_KEY_SESSION] || 'bypass-fake-session-id';
+                const fakeMessageId = getMessageId();
+                const meta = buildMetaTag(fakeSessionId, fakeMessageId, 'new', 0);
+                add(meta);
+                add('');
+                add('(This is what would be injected as the first system message)');
+                add('(Uses fake session ID if no real session exists)');
+                break;
+            }
+
+            case 'init_payload': {
+                add('=== Session Init Payload Preview ===');
+                add('');
+                if (isGroupChat && activeGroupCharacters.length > 0) {
+                    add('Mode: GROUP');
+                    add('');
+                    const members = activeGroupCharacters
+                        .filter(c => !c._unresolved)
+                        .map(c => ({
+                            name: c.name,
+                            description: (c.description || '').substring(0, 150) + '...',
+                            personality: (c.personality || '').substring(0, 100) + '...',
+                            scenario: (c.scenario || '').substring(0, 100) + '...',
+                            first_mes: (c.first_mes || '').substring(0, 100) + '...',
+                            mes_example: (c.mes_example || '').substring(0, 100) + '...',
+                        }));
+                    add(JSON.stringify({
+                        group_name: activeGroup.name,
+                        group_members: members,
+                        persona_name: context.name1 || '',
+                        persona_description: (context.personaDescription || '').substring(0, 200) + '...',
+                        is_group: true,
+                    }, null, 2));
+                } else {
+                    add('Mode: SINGLE CHARACTER');
+                    add('');
+                    add(JSON.stringify({
+                        character_name: context.name2 || '',
+                        character_description: (context.description || '').substring(0, 300) + '...',
+                        character_personality: (context.personality || '').substring(0, 200) + '...',
+                        character_scenario: (context.scenario || '').substring(0, 200) + '...',
+                        character_first_mes: (context.first_mes || '').substring(0, 200) + '...',
+                        character_mes_example: (context.mes_example || '').substring(0, 200) + '...',
+                        persona_name: context.name1 || '',
+                        persona_description: (context.personaDescription || '').substring(0, 200) + '...',
+                        is_group: false,
+                    }, null, 2));
+                }
+                add('');
+                add('(Descriptions truncated for display — full data is sent to Agent)');
+                break;
+            }
+
+            case 'session_lookup': {
+                add('=== Session Metadata (from ST chatMetadata) ===');
+                add('');
+                const meta = context.chatMetadata || {};
+                add(JSON.stringify(meta, null, 2));
+                add('');
+                add(`world_session_id:      ${meta[META_KEY_SESSION] || '(not set)'}`);
+                add(`ass_msg_counter:        ${meta[META_KEY_COUNTER] ?? '(not set)'}`);
+                add(`ass_session_initialized: ${meta[META_KEY_INITIALIZED] ?? '(not set)'}`);
+                break;
+            }
+
+            case 'last_intercept': {
+                add('=== Last Intercepted Request ===');
+                add('');
+                if (!lastInterceptLog) {
+                    add('No request has been intercepted yet.');
+                    add('Send a message in chat while the extension is enabled to see the data here.');
+                    break;
+                }
+                add(`Timestamp:      ${lastInterceptLog.timestamp}`);
+                add(`Message Type:   ${lastInterceptLog.messageType}`);
+                add(`Session ID:     ${lastInterceptLog.sessionId}`);
+                add(`Message ID:     ${lastInterceptLog.messageId}`);
+                add(`Swipe Index:    ${lastInterceptLog.swipeIndex}`);
+                add(`Target URL:     ${lastInterceptLog.targetUrl}`);
+                add(`Group Mode:     ${lastInterceptLog.groupMode}`);
+                add(`Active Group:   ${lastInterceptLog.activeGroup || '(none)'}`);
+                add(`Messages Count: ${lastInterceptLog.messagesCount}`);
+                add('');
+                add('--- Message Previews ---');
+                if (lastInterceptLog.messages) {
+                    lastInterceptLog.messages.forEach((m, i) => {
+                        add(`[${i}] ${m.role}: ${m.contentPreview}`);
+                    });
+                }
+                add('');
+                add('--- Full SYSTEM_META tag ---');
+                add(lastInterceptLog.metaTag);
+                break;
+            }
+
+            default:
+                add(`Unknown command: "${command}"`);
+        }
+    } catch (err) {
+        add('');
+        add(`ERROR: ${err.message}`);
+        add(err.stack || '');
+    }
+
+    return lines.join('\n');
+}
+
+// #############################################
+// # 14. Proactive Chat-Changed Hook (Phase 1)
 // #############################################
 
 /**
@@ -1188,6 +1635,14 @@ async function proactiveChatChanged() {
  */
 async function proactiveChatChangedWithId(origin, chatId) {
     try {
+        // --- BYPASS MODE: skip all Agent communication ---
+        if (isBypassMode()) {
+            console.log(`[${EXTENSION_NAME}] [BYPASS] Proactive setup skipped for chat ${chatId}`);
+            console.log(`[${EXTENSION_NAME}] [BYPASS] Would have: health check, session lookup, init`);
+            updateStatus('Bypass mode', '#5bc0de');
+            return;
+        }
+
         // Pre-flight: check if Agent is reachable before doing anything.
         // If the Agent isn't up yet, the lazy fallback (ensureSession in
         // the fetch interceptor) will handle session creation later.
@@ -1384,7 +1839,7 @@ async function createAndInitSession(origin, chatId) {
 }
 
 // #############################################
-// # 11. Session Management
+// # 15. Session Management
 // #############################################
 
 /**
@@ -1393,6 +1848,13 @@ async function createAndInitSession(origin, chatId) {
  * Creates one via POST /api/sessions if missing.
  */
 async function ensureSession(backendOrigin) {
+    // --- BYPASS MODE: return a fake session ID, don't talk to Agent ---
+    if (isBypassMode()) {
+        const fakeId = 'bypass-fake-session-id';
+        console.log(`[${EXTENSION_NAME}] [BYPASS] ensureSession: returning fake session ${fakeId}`);
+        return fakeId;
+    }
+
     // --- Ensure group data is loaded before doing anything ---
     // If proactive didn't run (or hasn't finished yet), we need group
     // info so initSession() can decide between group vs single-char mode.
@@ -1456,46 +1918,55 @@ async function initSession(backendOrigin, sessionId) {
     console.log(`[${EXTENSION_NAME}] Initializing session ${sessionId} with character data...`);
     updateStatus('Initializing session...', '#f0ad4e');
 
+    // Build the payload (needed for both bypass and real mode)
+    let initPayload;
+
+    if (isGroupChat && activeGroupCharacters.length > 0) {
+        // Group mode: send all member character cards
+        const members = activeGroupCharacters
+            .filter(c => !c._unresolved)
+            .map(c => ({
+                name: c.name,
+                description: c.description || '',
+                personality: c.personality || '',
+                scenario: c.scenario || '',
+                first_mes: c.first_mes || '',
+                mes_example: c.mes_example || '',
+            }));
+
+        initPayload = {
+            group_name: activeGroup.name,
+            group_members: members,
+            persona_name: context.name1 || '',
+            persona_description: context.personaDescription || '',
+            is_group: true,
+        };
+
+        console.log(`[${EXTENSION_NAME}] Group init: "${activeGroup.name}" with ${members.length} members`);
+    } else {
+        // Single character mode
+        initPayload = {
+            character_name: context.name2 || '',
+            character_description: context.description || '',
+            character_personality: context.personality || '',
+            character_scenario: context.scenario || '',
+            character_first_mes: context.first_mes || '',
+            character_mes_example: context.mes_example || '',
+            persona_name: context.name1 || '',
+            persona_description: context.personaDescription || '',
+            is_group: false,
+        };
+    }
+
+    // --- BYPASS MODE: log what we would have sent, don't actually call Agent ---
+    if (isBypassMode()) {
+        console.log(`[${EXTENSION_NAME}] [BYPASS] initSession SKIPPED for ${sessionId}. Would have POSTed:`);
+        console.log(`[${EXTENSION_NAME}] [BYPASS] URL: ${backendOrigin}/api/sessions/${sessionId}/init`);
+        console.log(`[${EXTENSION_NAME}] [BYPASS] Payload:`, JSON.stringify(initPayload, null, 2));
+        return;
+    }
+
     try {
-        let initPayload;
-
-        if (isGroupChat && activeGroupCharacters.length > 0) {
-            // Group mode: send all member character cards
-            const members = activeGroupCharacters
-                .filter(c => !c._unresolved)
-                .map(c => ({
-                    name: c.name,
-                    description: c.description || '',
-                    personality: c.personality || '',
-                    scenario: c.scenario || '',
-                    first_mes: c.first_mes || '',
-                    mes_example: c.mes_example || '',
-                }));
-
-            initPayload = {
-                group_name: activeGroup.name,
-                group_members: members,
-                persona_name: context.name1 || '',
-                persona_description: context.personaDescription || '',
-                is_group: true,
-            };
-
-            console.log(`[${EXTENSION_NAME}] Group init: "${activeGroup.name}" with ${members.length} members`);
-        } else {
-            // Single character mode
-            initPayload = {
-                character_name: context.name2 || '',
-                character_description: context.description || '',
-                character_personality: context.personality || '',
-                character_scenario: context.scenario || '',
-                character_first_mes: context.first_mes || '',
-                character_mes_example: context.mes_example || '',
-                persona_name: context.name1 || '',
-                persona_description: context.personaDescription || '',
-                is_group: false,
-            };
-        }
-
         const resp = await fetch(`${backendOrigin}/api/sessions/${sessionId}/init`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1516,7 +1987,7 @@ async function initSession(backendOrigin, sessionId) {
 }
 
 // #############################################
-// # 12. Message Type Detection
+// # 16. Message Type Detection
 // #############################################
 
 /**
@@ -1574,7 +2045,7 @@ async function incrementMessageId() {
 }
 
 // #############################################
-// # 13. History Trimming
+// # 17. History Trimming
 // #############################################
 
 /**
@@ -1597,7 +2068,7 @@ function trimHistory(messages, maxConversationMessages) {
 }
 
 // #############################################
-// # 14. [SYSTEM_META] Construction
+// # 18. [SYSTEM_META] Construction
 // #############################################
 
 /**
@@ -1638,7 +2109,7 @@ function buildMetaTag(sessionId, messageId, type, swipeIndex) {
 }
 
 // #############################################
-// # 15. Fetch Interception (Core Pipeline)
+// # 19. Fetch Interception (Core Pipeline)
 // #############################################
 
 function interceptFetch() {
@@ -1740,6 +2211,48 @@ function interceptFetch() {
 
             updateStatus(`Active (${messageType})`, '#5cb85c');
 
+            // --- BYPASS MODE: return a dummy response, don't call Agent ---
+            if (isBypassMode()) {
+                const logEntry = {
+                    timestamp: new Date().toISOString(),
+                    messageType,
+                    sessionId,
+                    messageId,
+                    swipeIndex: currentSwipeIndex,
+                    targetUrl,
+                    metaTag,
+                    groupMode: isGroupChat,
+                    activeGroup: isGroupChat && activeGroup ? activeGroup.name : null,
+                    messagesCount: bodyObject.messages.length,
+                    messages: bodyObject.messages.map(m => ({
+                        role: m.role,
+                        contentPreview: typeof m.content === 'string'
+                            ? m.content.substring(0, 200) + (m.content.length > 200 ? '...' : '')
+                            : '(non-string content)',
+                    })),
+                    fullBody: bodyObject,
+                };
+                lastInterceptLog = logEntry;
+
+                console.log(`[${EXTENSION_NAME}] [BYPASS] ========== INTERCEPTED REQUEST ==========`);
+                console.log(`[${EXTENSION_NAME}] [BYPASS] Target URL: ${targetUrl}`);
+                console.log(`[${EXTENSION_NAME}] [BYPASS] Meta tag: ${metaTag}`);
+                console.log(`[${EXTENSION_NAME}] [BYPASS] Messages (${bodyObject.messages.length}):`);
+                bodyObject.messages.forEach((m, i) => {
+                    const preview = typeof m.content === 'string'
+                        ? m.content.substring(0, 150) + (m.content.length > 150 ? '...' : '')
+                        : '(non-string)';
+                    console.log(`[${EXTENSION_NAME}] [BYPASS]   [${i}] ${m.role}: ${preview}`);
+                });
+                console.log(`[${EXTENSION_NAME}] [BYPASS] Full body:`, JSON.stringify(bodyObject, null, 2));
+                console.log(`[${EXTENSION_NAME}] [BYPASS] ==========================================`);
+
+                updateStatus(`Bypass (${messageType})`, '#5bc0de');
+
+                // Return a dummy streaming response that ST can parse
+                return createDummyResponse();
+            }
+
             return originalFetch.call(window, targetUrl, newOptions);
 
         } catch (err) {
@@ -1760,7 +2273,7 @@ function interceptFetch() {
 }
 
 // #############################################
-// # 16. Chat Event Hooks
+// # 20. Chat Event Hooks
 // #############################################
 
 function hookChatEvents() {
@@ -1794,7 +2307,7 @@ function hookChatEvents() {
 }
 
 // #############################################
-// # 17. Initialization
+// # 21. Initialization
 // #############################################
 
 (async function init() {
@@ -1831,7 +2344,7 @@ function hookChatEvents() {
     // Inject Char Config button into action bar
     injectCharConfigButton();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.6`);
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.8`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
     console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
 
