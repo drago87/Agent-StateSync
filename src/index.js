@@ -2,10 +2,10 @@
 // Intercepts chat completion requests, manages world-state sessions,
 // trims history, and communicates with the FastAPI + LangGraph Agent.
 //
-// v2.8 — Added debug panel + bypass mode (dummy responses instead of
-//          connecting to Agent). No actual Agent calls are made when
-//          bypass mode is enabled; all data that would be sent is
-//          output to the debug console and interceptor log.
+// v2.9 — Fixed group matching bug on F5 refresh: loadGroupData() now
+//          runs AFTER getCurrentChatId() is available, preventing the
+//          fallback heuristic from grabbing the wrong group.
+//          Also added mismatch warning in "Find Active Group" debug cmd.
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -1407,6 +1407,13 @@ async function executeDebugCommand(command) {
                     add('');
                     add(`isGroupChat = ${isGroupChat}`);
                     add(`activeGroupCharacters.length = ${activeGroupCharacters.length}`);
+                    if (isGroupChat && activeGroup && activeGroup.id !== found.id) {
+                        add('');
+                        add('*** WARNING: Global activeGroup does NOT match findActiveGroup() result! ***');
+                        add(`  activeGroup is still set to "${activeGroup.name}" (id=${activeGroup.id})`);
+                        add('  This can happen if loadGroupData() ran before getCurrentChatId() was ready.');
+                        add('  Fix: switch chats or reload the page (the proactive hook will re-run).');
+                    }
                 } else {
                     add('RESULT: NO MATCH FOUND — single character mode');
                     add('');
@@ -1588,22 +1595,19 @@ async function proactiveChatChanged() {
     proactiveInProgress = true;
 
     try {
-        // Step 1: Load group data for the new chat
+        // Step 1: Get the chat ID first (with retries if needed).
+        // We MUST have a valid chatId before loading group data,
+        // because findActiveGroup() uses getCurrentChatId() to match
+        // the correct group.  On F5 refresh, the chat ID isn't available
+        // immediately — if we load groups too early, the fallback
+        // heuristic grabs the wrong group.
         updateStatus('Loading chat data...', '#5bc0de');
-        try {
-            await loadGroupData();
-        } catch (e) {
-            console.warn(`[${EXTENSION_NAME}] Group data load failed (single-char fallback):`, e.message);
-        }
 
         const chatId = typeof context.getCurrentChatId === 'function'
             ? context.getCurrentChatId()
             : null;
 
         if (!chatId) {
-            // ST may not have the chat ID ready immediately after a
-            // chat-changed event.  Retry a few times with a short delay
-            // before giving up.
             console.log(`[${EXTENSION_NAME}] No chat ID yet, retrying...`);
             for (let attempt = 1; attempt <= 3; attempt++) {
                 await new Promise(r => setTimeout(r, 1000));
@@ -1635,10 +1639,20 @@ async function proactiveChatChanged() {
  */
 async function proactiveChatChangedWithId(origin, chatId) {
     try {
+        // --- Load group data NOW that we have a valid chatId ---
+        // This must happen before any Agent communication so that
+        // findActiveGroup() can use getCurrentChatId() correctly.
+        try {
+            await loadGroupData();
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] Group data load failed (single-char fallback):`, e.message);
+        }
+
         // --- BYPASS MODE: skip all Agent communication ---
         if (isBypassMode()) {
             console.log(`[${EXTENSION_NAME}] [BYPASS] Proactive setup skipped for chat ${chatId}`);
             console.log(`[${EXTENSION_NAME}] [BYPASS] Would have: health check, session lookup, init`);
+            console.log(`[${EXTENSION_NAME}] [BYPASS] Group detection result: isGroupChat=${isGroupChat}, activeGroup=${activeGroup ? activeGroup.name : '(none)'}`);
             updateStatus('Bypass mode', '#5bc0de');
             return;
         }
@@ -2344,7 +2358,7 @@ function hookChatEvents() {
     // Inject Char Config button into action bar
     injectCharConfigButton();
 
-    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.8`);
+    console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.9`);
     console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
     console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
 
