@@ -15,6 +15,10 @@ export const META_KEY_SESSION = 'world_session_id';
 export const META_KEY_COUNTER = 'ass_msg_counter';
 export const META_KEY_INITIALIZED = 'ass_session_initialized';
 
+// Key used to store character config data inside the character card's
+// data.extensions object.  Persists with the card on export/import.
+export const CHAR_CONFIG_EXT_KEY = 'agent_statesync';
+
 export const TEMPLATE_OPTIONS = [
     { value: 'chatml', label: 'ChatML' },
     { value: 'llama3', label: 'Llama 3' },

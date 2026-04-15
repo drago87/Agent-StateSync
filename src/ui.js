@@ -17,6 +17,7 @@ import {
 import { proactiveChatChanged } from './session.js';
 import { interceptFetch } from './pipeline.js';
 import { executeDebugCommand } from './debug.js';
+import { initCharConfig } from './char-config.js';
 
 // #############################################
 // # 10. UI Rendering
@@ -603,6 +604,9 @@ export function init() {
 
         // Inject Char Config button into action bar
         injectCharConfigButton();
+
+        // Inject brain button into Character Sheet Bar
+        initCharConfig();
 
         console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.9`);
         console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
