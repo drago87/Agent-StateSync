@@ -12,6 +12,7 @@ import {
 import { resolveBackendOrigin, getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
 import { ensureSession } from './session.js';
+import { getCharInitType } from './char-config.js';
 
 // #############################################
 // # 8. Dummy Response (Bypass Mode)
@@ -144,9 +145,16 @@ export function trimHistory(messages, maxConversationMessages) {
 /**
  * Build the [SYSTEM_META] tag with all per-request data.
  * In group mode, includes group_id and member names.
+ * Includes card_type for non-group chats.
  */
 export function buildMetaTag(sessionId, messageId, type, swipeIndex) {
     let tag = `[SYSTEM_META] session_id=${sessionId} message_id=${messageId} type=${type} swipe_index=${swipeIndex}`;
+
+    // Card type classification (single-char mode only)
+    if (!state.isGroupChat) {
+        const cardType = getCharInitType();
+        tag += ` card_type=${cardType}`;
+    }
 
     if (state.isGroupChat && state.activeGroup) {
         tag += ` group_id=${state.activeGroup.id} group_name=${state.activeGroup.name}`;

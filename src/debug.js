@@ -9,6 +9,7 @@ import {
 } from './settings.js';
 import { fetchGroupsFromServer, findActiveGroup, loadGroupData } from './groups.js';
 import { buildMetaTag, getMessageId } from './pipeline.js';
+import { buildInitPayload } from './session.js';
 
 // #############################################
 // # 12. Debug Command Handlers
@@ -181,6 +182,14 @@ export async function executeDebugCommand(command) {
                         add(`    personality: ${(c.personality || '').substring(0, 80)}${(c.personality || '').length > 80 ? '...' : ''}`);
                         add(`    scenario: ${(c.scenario || '').substring(0, 80)}${(c.scenario || '').length > 80 ? '...' : ''}`);
                         add(`    first_mes: ${(c.first_mes || '').substring(0, 80)}${(c.first_mes || '').length > 80 ? '...' : ''}`);
+
+                        // Show char config (brain button) data
+                        if (c.data?.extensions?.agent_statesync) {
+                            const cc = c.data.extensions.agent_statesync;
+                            add(`    [Agent Config] mode=${cc.mode || 'characters'}, names=${JSON.stringify(cc.names || [])}`);
+                        } else {
+                            add(`    [Agent Config] (default — no brain button config)`);
+                        }
                     }
                 }
                 if (state.activeGroup.disabled_members && state.activeGroup.disabled_members.length) {
@@ -204,45 +213,27 @@ export async function executeDebugCommand(command) {
             }
 
             case 'init_payload': {
-                add('=== Session Init Payload Preview ===');
+                add('=== Session Init Payload Preview (v3.0) ===');
                 add('');
-                if (state.isGroupChat && state.activeGroupCharacters.length > 0) {
-                    add('Mode: GROUP');
-                    add('');
-                    const members = state.activeGroupCharacters
-                        .filter(c => !c._unresolved)
-                        .map(c => ({
-                            name: c.name,
-                            description: (c.description || '').substring(0, 150) + '...',
-                            personality: (c.personality || '').substring(0, 100) + '...',
-                            scenario: (c.scenario || '').substring(0, 100) + '...',
-                            first_mes: (c.first_mes || '').substring(0, 100) + '...',
-                            mes_example: (c.mes_example || '').substring(0, 100) + '...',
-                        }));
-                    add(JSON.stringify({
-                        group_name: state.activeGroup.name,
-                        group_members: members,
-                        persona_name: state.context.name1 || '',
-                        persona_description: (state.context.personaDescription || '').substring(0, 200) + '...',
-                        is_group: true,
-                    }, null, 2));
-                } else {
-                    add('Mode: SINGLE CHARACTER');
-                    add('');
-                    add(JSON.stringify({
-                        character_name: state.context.name2 || '',
-                        character_description: (state.context.description || '').substring(0, 300) + '...',
-                        character_personality: (state.context.personality || '').substring(0, 200) + '...',
-                        character_scenario: (state.context.scenario || '').substring(0, 200) + '...',
-                        character_first_mes: (state.context.first_mes || '').substring(0, 200) + '...',
-                        character_mes_example: (state.context.mes_example || '').substring(0, 200) + '...',
-                        persona_name: state.context.name1 || '',
-                        persona_description: (state.context.personaDescription || '').substring(0, 200) + '...',
-                        is_group: false,
-                    }, null, 2));
-                }
+                add(`Mode: ${state.isGroupChat ? 'GROUP' : 'SINGLE CHARACTER'}`);
+                add('');
+
+                // Build the actual payload using the same logic as initSession()
+                const payload = buildInitPayload();
+
+                // Pretty-print with truncation for display
+                const displayPayload = JSON.parse(JSON.stringify(payload, (key, value) => {
+                    // Truncate long strings for display
+                    if (typeof value === 'string' && value.length > 200) {
+                        return value.substring(0, 200) + '... (truncated)';
+                    }
+                    return value;
+                }, 2));
+
+                add(JSON.stringify(displayPayload, null, 2));
                 add('');
                 add('(Descriptions truncated for display — full data is sent to Agent)');
+                add('(Empty fields are excluded from the payload)');
                 break;
             }
 

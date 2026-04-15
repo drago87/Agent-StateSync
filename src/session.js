@@ -2,14 +2,23 @@
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
+//
+// v3.0 — New init payload format:
+//   - Card types: plain character, scenario, multi-character
+//   - first_mes from chat messages (not card field)
+//   - Group chat: members ordered by first message in chat
+//   - group_scenario logic: include at top or per-member
+//   - Empty fields excluded from payload
 
 import state from './state.js';
 import {
     EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
+    CHAR_CONFIG_EXT_KEY,
     getSettings, isBypassMode, syncConfigToAgent, updateStatus,
 } from './settings.js';
 import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
+import { getCharInitType, getCharInitNames } from './char-config.js';
 
 // #############################################
 // # 14. Proactive Chat-Changed Hook
@@ -185,7 +194,8 @@ async function attachToExistingSession(origin, sessionId) {
         await state.context.saveMetadata();
 
         // Re-initialize with current character/group data
-        await initSession(origin, sessionId);
+        //await initSession(origin, sessionId);
+		// Init is now manual (Button 2) — session linked but not initialized
 
         // Sync config
         state.configSynced = false;
@@ -279,7 +289,8 @@ async function createAndInitSession(origin, chatId) {
         await state.context.saveMetadata();
 
         // Initialize with character/group data
-        await initSession(origin, sessionId);
+        // await initSession(origin, sessionId);
+		// Init is now manual (Button 2) — session created but not initialized
 
         // Sync config
         state.configSynced = false;
@@ -324,9 +335,9 @@ export async function ensureSession(backendOrigin) {
 
     // --- Check if session already exists in metadata ---
     if (state.context.chatMetadata && state.context.chatMetadata[META_KEY_SESSION]) {
-        if (!state.context.chatMetadata[META_KEY_INITIALIZED]) {
-            await initSession(backendOrigin, state.context.chatMetadata[META_KEY_SESSION]);
-        }
+        //if (!state.context.chatMetadata[META_KEY_INITIALIZED]) {
+        //    await initSession(backendOrigin, state.context.chatMetadata[META_KEY_SESSION]);
+        //}
         return state.context.chatMetadata[META_KEY_SESSION];
     }
 
@@ -356,7 +367,8 @@ export async function ensureSession(backendOrigin) {
         state.context.chatMetadata[META_KEY_COUNTER] = 0;
         await state.context.saveMetadata();
 
-        await initSession(backendOrigin, sessionId);
+        //await initSession(backendOrigin, sessionId);
+		// Init is now manual (Button 2)
 
         return sessionId;
     } catch (err) {
@@ -365,53 +377,301 @@ export async function ensureSession(backendOrigin) {
     }
 }
 
+// #############################################
+// # 15b. Init Payload Builder (v3.0)
+// #############################################
+
+/**
+ * Build the character/scenario data object from a character's card fields.
+ * Uses the first message from the chat (not the card's first_mes field).
+ * Excludes empty fields.
+ *
+ * @param {object} charData - Character object (from context.characters[] or context itself)
+ * @param {string|null} firstMesOverride - Override first_mes (from chat messages)
+ * @returns {object} Clean data object with only non-empty fields
+ */
+function buildCardData(charData, firstMesOverride) {
+    const data = {};
+
+    const desc = charData.description || '';
+    if (desc) data.description = desc;
+
+    const personality = charData.personality || '';
+    if (personality) data.personality = personality;
+
+    const scenario = charData.scenario || '';
+    if (scenario) data.scenario = scenario;
+
+    const firstMes = firstMesOverride || '';
+    if (firstMes) data.first_mes = firstMes;
+
+    const mesExample = charData.mes_example || '';
+    if (mesExample) data.mes_example = mesExample;
+
+    return data;
+}
+
+/**
+ * Build the persona object. Excludes empty fields.
+ */
+function buildPersona() {
+    const persona = {};
+
+    const name = state.context.name1 || '';
+    if (name) persona.name = name;
+
+    const desc = state.context.personaDescription || '';
+    if (desc) persona.description = desc;
+
+    return Object.keys(persona).length > 0 ? persona : undefined;
+}
+
+/**
+ * Get the first message for a character from the chat history.
+ * In group chats, we look for the first message where the character's name
+ * appears as the sender (is_user=false, name matches).
+ * In single-char chats, we just grab the first non-system message.
+ *
+ * @param {string|null} charName - Character name to look for (group mode)
+ * @returns {string|null} The message text, or null if no message found
+ */
+function getFirstMesFromChat(charName) {
+    const chat = state.context.chat;
+    if (!Array.isArray(chat) || chat.length === 0) return null;
+
+    if (charName) {
+        // Group mode: find the first message from this character
+        for (const msg of chat) {
+            if (!msg.is_user && msg.name === charName && msg.mes) {
+                return msg.mes;
+            }
+        }
+        // Also try matching with the ForceAvatar-based name
+        // (ST may store character names differently in chat messages)
+        return null;
+    }
+
+    // Single-char mode: first non-user message
+    for (const msg of chat) {
+        if (!msg.is_user && msg.mes) {
+            return msg.mes;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Read the char config (type + names) stored in a character card's extensions.
+ * Used for group members where each card can be independently classified.
+ *
+ * @param {object} charObj - Character object from context.characters[]
+ * @returns {{ type: string, names: string[] }}
+ */
+function readMemberCharConfig(charObj) {
+    if (!charObj?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]) {
+        return { type: 'character', names: [] };
+    }
+
+    const stored = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
+    if (stored.mode === 'scenario') {
+        return { type: 'scenario', names: [] };
+    }
+
+    // Multi-character if 2+ names defined
+    const names = Array.isArray(stored.names)
+        ? stored.names.map(n => (n || '').trim()).filter(Boolean)
+        : [];
+    if (names.length >= 2) {
+        return { type: 'multi-character', names };
+    }
+
+    return { type: 'character', names: [] };
+}
+
+/**
+ * Build a single group member entry for the init payload.
+ * Each member respects its own card type classification.
+ *
+ * @param {object} charObj - Resolved character object
+ * @param {string|null} firstMes - First message from chat for this member (or null)
+ * @returns {object} Member payload object
+ */
+function buildGroupMemberPayload(charObj, firstMes) {
+    const config = readMemberCharConfig(charObj);
+    const cardName = charObj.name || 'Unknown';
+    const cardData = buildCardData(charObj, firstMes);
+
+    const member = {
+        is_multi_character: config.type === 'multi-character',
+        is_scenario: config.type === 'scenario',
+        card_name: cardName,
+    };
+
+    if (config.type === 'multi-character' && config.names.length > 0) {
+        member.character_names = config.names.join(', ');
+        member.character = cardData;
+    } else if (config.type === 'scenario') {
+        // Scenario: card data goes under "scenario" key instead of "character"
+        member.scenario = cardData;
+    } else {
+        // Plain character
+        member.character = cardData;
+    }
+
+    return member;
+}
+
+/**
+ * Build the full init payload for POST /api/sessions/{id}/init
+ * according to the v3.0 spec.
+ *
+ * Handles all cases:
+ * - Single character (plain / multi-character / scenario)
+ * - Group chat with mixed card types
+ * - group_scenario logic
+ * - Empty field exclusion
+ * - first_mes from chat messages
+ *
+ * @returns {object} The complete init payload
+ */
+export function buildInitPayload() {
+    if (state.isGroupChat && state.activeGroupCharacters.length > 0) {
+        return buildGroupInitPayload();
+    }
+    return buildSingleCharInitPayload();
+}
+
+/**
+ * Build init payload for a single character (non-group) chat.
+ */
+function buildSingleCharInitPayload() {
+    const cardType = getCharInitType();      // 'character' | 'multi-character' | 'scenario'
+    const cardNames = getCharInitNames();   // [] for character/scenario, ['Alice','Bob'] for multi
+    const cardName = state.context.name2 || '';
+    const firstMes = getFirstMesFromChat(null);
+    const cardData = buildCardData(state.context, firstMes);
+    const persona = buildPersona();
+
+    const payload = {
+        is_group: false,
+        is_multi_character: cardType === 'multi-character',
+        is_scenario: cardType === 'scenario',
+        card_name: cardName,
+    };
+
+    // For multi-character, include character_names
+    if (cardType === 'multi-character' && cardNames.length > 0) {
+        payload.character_names = cardNames.join(', ');
+    }
+
+    // Card data goes under "character" or "scenario" key depending on type
+    if (cardType === 'scenario') {
+        payload.scenario = cardData;
+    } else {
+        payload.character = cardData;
+    }
+
+    // Persona
+    if (persona) {
+        payload.persona = persona;
+    }
+
+    console.log(`[${EXTENSION_NAME}] Single-char init: type=${cardType}, name="${cardName}"`);
+
+    return payload;
+}
+
+/**
+ * Build init payload for a group chat.
+ * Members are ordered by their first message in the chat.
+ * Handles group_scenario logic and per-member card type classification.
+ */
+function buildGroupInitPayload() {
+    const members = state.activeGroupCharacters.filter(c => !c._unresolved);
+
+    // --- Determine member ordering by first message in chat ---
+    // Build a map of char name -> first message index
+    const chat = state.context.chat;
+    const nameToFirstIndex = new Map();
+    if (Array.isArray(chat) && chat.length > 0) {
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (!msg.is_user && msg.name && !nameToFirstIndex.has(msg.name)) {
+                nameToFirstIndex.set(msg.name, i);
+            }
+        }
+    }
+
+    // Sort members by their first message index (unseen members keep original order)
+    const sortedMembers = [...members];
+    sortedMembers.sort((a, b) => {
+        const idxA = nameToFirstIndex.get(a.name) ?? Number.MAX_SAFE_INTEGER;
+        const idxB = nameToFirstIndex.get(b.name) ?? Number.MAX_SAFE_INTEGER;
+        // Both unseen: keep original order
+        if (idxA === Number.MAX_SAFE_INTEGER && idxB === Number.MAX_SAFE_INTEGER) return 0;
+        return idxA - idxB;
+    });
+
+    // --- Check if any member is a scenario-type card ---
+    const groupScenarioMember = sortedMembers.find(m => {
+        const config = readMemberCharConfig(m);
+        return config.type === 'scenario';
+    });
+
+    // --- Get group_scenario: use the scenario-type member's scenario text ---
+    const groupScenario = groupScenarioMember?.scenario || '';
+
+    // --- Build member payloads ---
+    const memberPayloads = sortedMembers.map(m => {
+        const firstMes = getFirstMesFromChat(m.name);
+        const member = buildGroupMemberPayload(m, firstMes);
+
+        // If the group has a group_scenario, strip the scenario key from each member
+        if (groupScenario && member.scenario) {
+            delete member.scenario;
+        }
+
+        return member;
+    });
+
+    // --- Build final payload ---
+    const payload = {
+        is_group: true,
+        group_name: state.activeGroup.name,
+        group_members: memberPayloads,
+    };
+
+    // group_scenario: include only if non-empty
+    if (groupScenario) {
+        payload.group_scenario = groupScenario;
+    }
+
+    // Persona (top-level only for groups)
+    const persona = buildPersona();
+    if (persona) {
+        payload.persona = persona;
+    }
+
+    console.log(`[${EXTENSION_NAME}] Group init: "${state.activeGroup.name}" with ${memberPayloads.length} members`);
+    console.log(`[${EXTENSION_NAME}] group_scenario: ${groupScenario ? 'yes' : 'no'}`);
+
+    return payload;
+}
+
 /**
  * Send character card + persona data to the Agent for initial world-state parsing.
  * In group mode, sends all group members instead of a single character.
+ *
+ * Uses the new v3.0 payload format with card type classification,
+ * first_mes from chat messages, and empty field exclusion.
  */
 export async function initSession(backendOrigin, sessionId) {
     console.log(`[${EXTENSION_NAME}] Initializing session ${sessionId} with character data...`);
     updateStatus('Initializing session...', '#f0ad4e');
 
     // Build the payload (needed for both bypass and real mode)
-    let initPayload;
-
-    if (state.isGroupChat && state.activeGroupCharacters.length > 0) {
-        // Group mode: send all member character cards
-        const members = state.activeGroupCharacters
-            .filter(c => !c._unresolved)
-            .map(c => ({
-                name: c.name,
-                description: c.description || '',
-                personality: c.personality || '',
-                scenario: c.scenario || '',
-                first_mes: c.first_mes || '',
-                mes_example: c.mes_example || '',
-            }));
-
-        initPayload = {
-            group_name: state.activeGroup.name,
-            group_members: members,
-            persona_name: state.context.name1 || '',
-            persona_description: state.context.personaDescription || '',
-            is_group: true,
-        };
-
-        console.log(`[${EXTENSION_NAME}] Group init: "${state.activeGroup.name}" with ${members.length} members`);
-    } else {
-        // Single character mode
-        initPayload = {
-            character_name: state.context.name2 || '',
-            character_description: state.context.description || '',
-            character_personality: state.context.personality || '',
-            character_scenario: state.context.scenario || '',
-            character_first_mes: state.context.first_mes || '',
-            character_mes_example: state.context.mes_example || '',
-            persona_name: state.context.name1 || '',
-            persona_description: state.context.personaDescription || '',
-            is_group: false,
-        };
-    }
+    const initPayload = buildInitPayload();
 
     // --- BYPASS MODE: log what we would have sent, don't actually call Agent ---
     if (isBypassMode()) {
@@ -433,10 +693,89 @@ export async function initSession(backendOrigin, sessionId) {
             state.context.chatMetadata[META_KEY_INITIALIZED] = true;
             await state.context.saveMetadata();
             updateStatus('Session initialized', '#5cb85c');
+            return true;
         } else {
-            console.warn(`[${EXTENSION_NAME}] Session init returned ${resp.status}. Will retry on next request.`);
+            console.warn(`[${EXTENSION_NAME}] Session init returned ${resp.status}.`);
+            return false;
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Session init failed (Agent may be starting up):`, err.message);
+        return false;
     }
+}
+
+/**
+ * Manually send the init payload to the Agent.
+ * Triggered by Button 2 (Init Session button near the text area).
+ * Creates a session if one doesn't exist yet, then sends character/group data.
+ *
+ * @returns {boolean} true if init succeeded, false otherwise
+ */
+export async function manualInitSession() {
+    const settings = getSettings();
+    if (!settings.enabled) {
+        toastr.info('Enable State Sync first.', 'Agent-StateSync');
+        return false;
+    }
+
+    const origin = getAgentOrigin();
+    if (!origin) {
+        toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
+        return false;
+    }
+
+    let sessionId = state.context.chatMetadata?.[META_KEY_SESSION];
+
+    // Create session if one doesn't exist yet
+    if (!sessionId) {
+        const chatId = typeof state.context.getCurrentChatId === 'function'
+            ? state.context.getCurrentChatId() : null;
+
+        try {
+            updateStatus('Creating session...', '#f0ad4e');
+
+            const resp = await fetch(`${origin}/api/sessions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ st_chat_id: chatId || '' }),
+            });
+
+            if (!resp.ok) throw new Error(`Session API returned ${resp.status}`);
+            const data = await resp.json();
+            if (!data.session_id) throw new Error('Invalid session response');
+
+            sessionId = data.session_id;
+
+            state.context.chatMetadata = state.context.chatMetadata || {};
+            state.context.chatMetadata[META_KEY_SESSION] = sessionId;
+            state.context.chatMetadata[META_KEY_COUNTER] = 0;
+            await state.context.saveMetadata();
+
+            console.log(`[${EXTENSION_NAME}] Manual session created: ${sessionId}`);
+        } catch (err) {
+            console.error(`[${EXTENSION_NAME}] Manual session creation failed:`, err);
+            toastr.error(`Session creation failed: ${err.message}`, 'Agent-StateSync');
+            updateStatus('Session creation failed', '#d9534f');
+            return false;
+        }
+    }
+
+    // Send init payload
+    const success = await initSession(origin, sessionId);
+
+    if (success) {
+        const shortId = sessionId.substring(0, 8);
+        const chatLabel = state.isGroupChat && state.activeGroup
+            ? `Group "${state.activeGroup.name}"`
+            : `"${state.context.name2 || 'Unknown'}"`;
+        toastr.success(`Initialized: ${chatLabel} (${shortId}...)`, 'Agent-StateSync');
+    } else {
+        toastr.error('Init failed \u2014 check console (F12)', 'Agent-StateSync');
+    }
+
+    // Sync config after init
+    state.configSynced = false;
+    await syncConfigToAgent(settings, origin);
+
+    return success;
 }
