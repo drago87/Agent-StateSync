@@ -608,7 +608,7 @@ export function init() {
         // Inject brain button into Character Sheet Bar
         initCharConfig();
 
-        console.log(`[${EXTENSION_NAME}] Extension loaded. Version 2.9`);
+        console.log(`[${EXTENSION_NAME}] Extension loaded. Version 3.0`);
         console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
         console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
 
