@@ -14,7 +14,7 @@ import {
     getAgentOrigin, refreshAgentUrlDisplay, handleReconnect,
     startHealthChecks, stopHealthChecks, setConnectionStatus,
 } from './agent-url.js';
-import { proactiveChatChanged, manualInitSession } from './session.js';
+import { proactiveChatChanged } from './session.js';
 import { interceptFetch } from './pipeline.js';
 import { executeDebugCommand } from './debug.js';
 import { initCharConfig } from './char-config.js';
@@ -287,23 +287,21 @@ export function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- Bypass Mode — DISABLED (hidden, code preserved for re-enabling) -->
-                <div style="display:none;">
-                    <div class="ass-enable-row margin-bot-10">
-                        <label class="checkbox_label" for="ass-bypass-toggle">
-                            <input type="checkbox" id="ass-bypass-toggle">
-                            <span>Bypass Mode (no Agent)</span>
-                        </label>
-                    </div>
-                    <small style="color: var(--fg_dim); margin-bottom: 10px; display: block;">
-                        When enabled, the extension intercepts requests but returns dummy responses instead of connecting to the Agent. All data that would have been sent is logged to the browser console (F12). Use this for debugging group matching and metadata issues.
-                    </small>
+                <!-- Bypass Mode -->
+                <div class="ass-enable-row margin-bot-10">
+                    <label class="checkbox_label" for="ass-bypass-toggle">
+                        <input type="checkbox" id="ass-bypass-toggle">
+                        <span>Bypass Mode (no Agent)</span>
+                    </label>
                 </div>
+                <small style="color: var(--fg_dim); margin-bottom: 10px; display: block;">
+                    When enabled, the extension intercepts requests but returns dummy responses instead of connecting to the Agent. All data that would have been sent is logged to the browser console (F12). Use this for debugging group matching and metadata issues.
+                </small>
 
                 <hr class="sysHR">
 
-                <!-- Debug Panel — DISABLED (hidden, code preserved for re-enabling) -->
-                <div class="margin-bot-10" style="display:none;">
+                <!-- Debug Panel -->
+                <div class="margin-bot-10">
                     <label class="title_restorable">
                         <small><b>Debug Tools</b></small>
                     </label>
@@ -351,11 +349,9 @@ export function renderSettingsUI() {
         if (settings.enabled) {
             onSettingChange();
             startHealthChecks();
-            $('#ass-init-btn').show();
         } else {
             stopHealthChecks();
             setConnectionStatus(false, 'Extension disabled');
-            $('#ass-init-btn').hide();
         }
     });
 
@@ -536,51 +532,6 @@ export function injectCharConfigButton() {
 }
 
 // #############################################
-// # 22. Init Session Button (Button 2)
-// #############################################
-
-/**
- * Inject the "Init Session" button near SillyTavern's send button.
- * This is Button 2 — the manual trigger for sending the init payload.
- * Sessions are still created automatically in the background;
- * this button sends the character/group data to the Agent.
- */
-export function injectInitButton() {
-    if ($('#ass-init-btn').length) return;
-
-    const $menuBtn = $('#option_menu');
-    if (!$menuBtn.length) {
-        setTimeout(injectInitButton, 1000);
-        return;
-    }
-
-    const $btn = $(`
-        <button id="ass-init-btn" class="menu_button" type="button"
-                title="Send character/group data to Agent session"
-                style="margin-right:4px;">
-            <i class="fa-solid fa-rocket"></i>
-        </button>
-    `);
-
-    $menuBtn.before($btn);
-
-    // Initially hidden if extension not enabled
-    if (!getSettings().enabled) {
-        $btn.hide();
-    }
-
-    $btn.on('click', async function () {
-        const $this = $(this);
-        $this.prop('disabled', true).css('opacity', '0.5');
-        try {
-            await manualInitSession();
-        } finally {
-            $this.prop('disabled', false).css('opacity', '1');
-        }
-    });
-}
-
-// #############################################
 // # 20. Chat Event Hooks
 // #############################################
 
@@ -656,9 +607,6 @@ export function init() {
 
         // Inject brain button into Character Sheet Bar
         initCharConfig();
-
-        // Inject Init Session button near the text area (Button 2)
-        injectInitButton();
 
         console.log(`[${EXTENSION_NAME}] Extension loaded. Version 3.0`);
         console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
