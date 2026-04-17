@@ -121,7 +121,6 @@ export async function checkAgentHealth() {
             return true;
         } else {
             setConnectionStatus(false, `Agent returned ${resp.status}`);
-            resetLlmDots(`Agent error ${resp.status}`);
             return false;
         }
     } catch (err) {
@@ -130,28 +129,7 @@ export async function checkAgentHealth() {
         } else {
             setConnectionStatus(false, 'Agent not reachable');
         }
-        // Agent unreachable — reset LLM dots to off
-        resetLlmDots('Agent not reachable');
         return false;
-    }
-}
-
-/**
- * Reset both LLM status dots to the grey 'off' state.
- * Called when the Agent itself is unreachable or returns an error.
- */
-function resetLlmDots(reason) {
-    const rpDot = $('#ass-rp-dot');
-    if (rpDot.length) {
-        rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red');
-        rpDot.addClass('ass-llm-dot-off');
-        rpDot.attr('title', `RP LLM: ${reason}`);
-    }
-    const instructDot = $('#ass-instruct-dot');
-    if (instructDot.length) {
-        instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red');
-        instructDot.addClass('ass-llm-dot-off');
-        instructDot.attr('title', `Instruct LLM: ${reason}`);
     }
 }
 
