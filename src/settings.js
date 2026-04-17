@@ -51,7 +51,7 @@ export const HEALTH_CHECK_TIMEOUT_MS = 5000;   // 5 second timeout per check
 
 export const defaultSettings = {
     enabled: false,
-    bypassMode: true,          // When true, don't connect to Agent — return dummy responses
+    bypassMode: false,          // When true, don't connect to Agent — return dummy responses
     rpLlmUrl: '192.168.0.1:5001',
     instructLlmUrl: '192.168.0.1:11434',
     rpTemplate: 'chatml',
@@ -82,14 +82,13 @@ export const DEBUG_COMMANDS = [
 export function getSettings() {
     const stored = state.context.extensionSettings[SETTINGS_KEY];
     const merged = { ...defaultSettings, ...(stored || {}) };
-    // Bypass mode should default to true if the key doesn't exist yet (new installs)
-    if (stored && stored.bypassMode === undefined) {
-        merged.bypassMode = true;
-    }
     return merged;
 }
 
 export function isBypassMode() {
+    // When debug mode is off, bypass is always off regardless of saved setting.
+    // When debug mode is on, bypass depends on the bypassMode toggle.
+    if (!state.debug) return false;
     return getSettings().bypassMode;
 }
 

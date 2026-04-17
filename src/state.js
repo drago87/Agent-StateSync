@@ -7,6 +7,8 @@
 const state = {
     // SillyTavern context (set once during init)
     context: null,
+	// Debug mode (set from config.json at startup)
+    debug: false,
 
     // Config sync tracking
     configSynced: false,

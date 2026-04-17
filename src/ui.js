@@ -14,10 +14,11 @@ import {
     getAgentOrigin, refreshAgentUrlDisplay, handleReconnect,
     startHealthChecks, stopHealthChecks, setConnectionStatus,
 } from './agent-url.js';
-import { proactiveChatChanged } from './session.js';
+import { proactiveChatChanged, manualInitSession } from './session.js';
 import { interceptFetch } from './pipeline.js';
 import { executeDebugCommand } from './debug.js';
 import { initCharConfig } from './char-config.js';
+import { initTrackedFieldsUI } from './tracked-fields.js';
 
 // #############################################
 // # 10. UI Rendering
@@ -150,6 +151,29 @@ export function injectCustomCSS() {
             background-color: #555;
             box-shadow: none;
         }
+
+        /* Init Session button */
+        .ass-init-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px;
+            border: 1px solid rgba(92, 184, 92, 0.4);
+            border-radius: 4px;
+            background: rgba(92, 184, 92, 0.15);
+            color: #5cb85c;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .ass-init-btn:hover {
+            background: rgba(92, 184, 92, 0.3);
+            border-color: rgba(92, 184, 92, 0.6);
+        }
+        .ass-init-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>`;
 
     $('head').append(css);
@@ -157,6 +181,8 @@ export function injectCustomCSS() {
 
 export function renderSettingsUI() {
     injectCustomCSS();
+
+    const debugVisible = state.debug ? '' : 'display:none;';
 
     const settingsHtml = `
     <div class="agent-statesync-extension">
@@ -287,33 +313,41 @@ export function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- Bypass Mode -->
-                <div class="ass-enable-row margin-bot-10">
-                    <label class="checkbox_label" for="ass-bypass-toggle">
-                        <input type="checkbox" id="ass-bypass-toggle">
-                        <span>Bypass Mode (no Agent)</span>
-                    </label>
-                </div>
-                <small style="color: var(--fg_dim); margin-bottom: 10px; display: block;">
-                    When enabled, the extension intercepts requests but returns dummy responses instead of connecting to the Agent. All data that would have been sent is logged to the browser console (F12). Use this for debugging group matching and metadata issues.
-                </small>
+                <!-- Tracked Fields Editor (always visible) -->
+                <div id="ass-tracked-fields-container" class="margin-bot-10"></div>
 
                 <hr class="sysHR">
 
-                <!-- Debug Panel -->
-                <div class="margin-bot-10">
-                    <label class="title_restorable">
-                        <small><b>Debug Tools</b></small>
-                    </label>
-                    <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
-                        <select id="ass-debug-cmd" class="text_pole" style="flex:1;">
-                            ${DEBUG_COMMANDS.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}
-                        </select>
-                        <button id="ass-debug-run" class="menu_button" type="button" style="white-space:nowrap;">
-                            <i class="fa-solid fa-play"></i> Run
-                        </button>
+                <!-- Debug-only section: Bypass Mode + Debug Panel -->
+                <div id="ass-debug-section" style="${debugVisible}">
+                    <!-- Bypass Mode -->
+                    <div class="ass-enable-row margin-bot-10">
+                        <label class="checkbox_label" for="ass-bypass-toggle">
+                            <input type="checkbox" id="ass-bypass-toggle">
+                            <span>Bypass Mode (no Agent)</span>
+                        </label>
                     </div>
-                    <textarea id="ass-debug-output" class="text_pole" style="width:100%; height:220px; font-family:monospace; font-size:11px; resize:vertical; overflow:auto; white-space:pre;" readonly placeholder="Debug output will appear here...\n\nTip: Run &quot;Chat ID &amp; Group ID&quot; first, then &quot;Load &amp; Dump Groups&quot;, then &quot;Find Active Group&quot; to diagnose group matching."></textarea>
+                    <small style="color: var(--fg_dim); margin-bottom: 10px; display: block;">
+                        When enabled, the extension intercepts requests but returns dummy responses instead of connecting to the Agent. All data that would have been sent is logged to the browser console (F12). Use this for debugging group matching and metadata issues.
+                    </small>
+
+                    <hr class="sysHR">
+
+                    <!-- Debug Panel -->
+                    <div class="margin-bot-10">
+                        <label class="title_restorable">
+                            <small><b>Debug Tools</b></small>
+                        </label>
+                        <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+                            <select id="ass-debug-cmd" class="text_pole" style="flex:1;">
+                                ${DEBUG_COMMANDS.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}
+                            </select>
+                            <button id="ass-debug-run" class="menu_button" type="button" style="white-space:nowrap;">
+                                <i class="fa-solid fa-play"></i> Run
+                            </button>
+                        </div>
+                        <textarea id="ass-debug-output" class="text_pole" style="width:100%; height:220px; font-family:monospace; font-size:11px; resize:vertical; overflow:auto; white-space:pre;" readonly placeholder="Debug output will appear here...\n\nTip: Run &quot;Chat ID &amp; Group ID&quot; first, then &quot;Load &amp; Dump Groups&quot;, then &quot;Find Active Group&quot; to diagnose group matching."></textarea>
+                    </div>
                 </div>
 
             </div>
@@ -406,45 +440,54 @@ export function renderSettingsUI() {
     // --- Reconnect button ---
     $('#ass-reconnect-btn').on('click', handleReconnect);
 
-    // --- Bypass mode toggle ---
-    $('#ass-bypass-toggle').prop('checked', s.bypassMode);
-    $('#ass-bypass-toggle').on('change', function () {
-        const settings = getSettings();
-        settings.bypassMode = $(this).prop('checked');
-        saveSettings(settings);
-        console.log(`[${EXTENSION_NAME}] Bypass mode: ${settings.bypassMode ? 'ON' : 'OFF'}`);
-        if (settings.bypassMode) {
-            setConnectionStatus(true, 'Bypass mode (no Agent)');
-            updateStatus('Bypass mode', '#5bc0de');
-            stopHealthChecks();
-        } else {
-            setConnectionStatus(false, 'Agent not reachable');
-            updateStatus('Idle', 'var(--fg_dim)');
-            if (settings.enabled) {
-                startHealthChecks();
+    // --- Bypass mode toggle (only bound if debug section exists) ---
+    const $bypassToggle = $('#ass-bypass-toggle');
+    if ($bypassToggle.length) {
+        $bypassToggle.prop('checked', s.bypassMode);
+        $bypassToggle.on('change', function () {
+            const settings = getSettings();
+            settings.bypassMode = $(this).prop('checked');
+            saveSettings(settings);
+            console.log(`[${EXTENSION_NAME}] Bypass mode: ${settings.bypassMode ? 'ON' : 'OFF'}`);
+            if (settings.bypassMode) {
+                setConnectionStatus(true, 'Bypass mode (no Agent)');
+                updateStatus('Bypass mode', '#5bc0de');
+                stopHealthChecks();
+            } else {
+                setConnectionStatus(false, 'Agent not reachable');
+                updateStatus('Idle', 'var(--fg_dim)');
+                if (settings.enabled) {
+                    startHealthChecks();
+                }
             }
-        }
-    });
+        });
+    }
 
-    // --- Debug panel ---
-    $('#ass-debug-run').on('click', async function () {
-        const cmd = $('#ass-debug-cmd').val();
-        if (!cmd) {
-            setDebugOutput('Select a debug command from the dropdown first.');
-            return;
-        }
-        const $btn = $(this);
-        $btn.prop('disabled', true);
-        setDebugOutput('Running...');
-        try {
-            const output = await executeDebugCommand(cmd);
-            setDebugOutput(output);
-        } catch (err) {
-            setDebugOutput(`Error: ${err.message}\n${err.stack || ''}`);
-        } finally {
-            $btn.prop('disabled', false);
-        }
-    });
+    // --- Debug panel (only bound if debug section exists) ---
+    const $debugRun = $('#ass-debug-run');
+    if ($debugRun.length) {
+        $debugRun.on('click', async function () {
+            const cmd = $('#ass-debug-cmd').val();
+            if (!cmd) {
+                setDebugOutput('Select a debug command from the dropdown first.');
+                return;
+            }
+            const $btn = $(this);
+            $btn.prop('disabled', true);
+            setDebugOutput('Running...');
+            try {
+                const output = await executeDebugCommand(cmd);
+                setDebugOutput(output);
+            } catch (err) {
+                setDebugOutput(`Error: ${err.message}\n${err.stack || ''}`);
+            } finally {
+                $btn.prop('disabled', false);
+            }
+        });
+    }
+
+    // --- Initialize tracked fields UI ---
+    initTrackedFieldsUI();
 
     // --- Start health checks if extension is already enabled ---
     if (s.enabled) {
@@ -532,6 +575,67 @@ export function injectCharConfigButton() {
 }
 
 // #############################################
+// # Init Session Button (Rocket Icon)
+// #############################################
+
+/**
+ * Inject an "Init Session" button into SillyTavern's chat controls area.
+ * Allows manual initialization of the Agent session for the current chat.
+ */
+export function injectInitButton() {
+    if ($('#ass-init-session-btn').length) return; // Already injected
+
+    const $sendForm = $('#send_form');
+    if (!$sendForm.length) {
+        // ST not ready yet - retry
+        setTimeout(injectInitButton, 1000);
+        return;
+    }
+
+    const $btn = $(`
+        <div id="ass-init-session-btn" style="display:inline-flex; margin:0 4px; align-items:center;">
+            <button class="ass-init-btn menu_button" type="button" title="Initialize Agent session for this chat">
+                <i class="fa-solid fa-rocket"></i>
+                Init Session
+            </button>
+        </div>
+    `);
+
+    $sendForm.before($btn);
+
+    $btn.on('click', async function () {
+        const settings = getSettings();
+        if (!settings.enabled) {
+            toastr.info('Enable State Sync first.', 'Agent-StateSync');
+            return;
+        }
+
+        const origin = getAgentOrigin();
+        if (!origin) {
+            toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
+            return;
+        }
+
+        const $button = $btn.find('button');
+        $button.prop('disabled', true);
+        toastr.info('Initializing Agent session...', 'Agent-StateSync');
+
+        try {
+            const success = await manualInitSession();
+            if (success) {
+                toastr.success('Agent session initialized!', 'Agent-StateSync');
+            } else {
+                toastr.warning('Init failed. Check console for details.', 'Agent-StateSync');
+            }
+        } catch (err) {
+            toastr.error(`Init failed: ${err.message}`, 'Agent-StateSync');
+        } finally {
+            $button.prop('disabled', false);
+        }
+    });
+}
+
+// #############################################
 // # 20. Chat Event Hooks
 // #############################################
 
@@ -569,7 +673,11 @@ export function hookChatEvents() {
 // # 21. Initialization
 // #############################################
 
-export function init() {
+export function init(debug = false) {
+    // Store debug flag in state before anything else
+    state.debug = debug;
+    console.log(`[${EXTENSION_NAME}] Debug mode: ${state.debug}`);
+
     // Wait for SillyTavern to be ready
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve) => {
@@ -604,6 +712,9 @@ export function init() {
 
         // Inject Char Config button into action bar
         injectCharConfigButton();
+
+        // Inject Init Session button into chat controls
+        injectInitButton();
 
         // Inject brain button into Character Sheet Bar
         initCharConfig();

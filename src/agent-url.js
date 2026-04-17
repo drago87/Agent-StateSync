@@ -133,6 +133,21 @@ export async function checkAgentHealth() {
     }
 }
 
+function resetLlmDots(reason) {
+    const rpDot = $('#ass-rp-dot');
+    if (rpDot.length) {
+        rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red');
+        rpDot.addClass('ass-llm-dot-off');
+        rpDot.attr('title', `RP LLM: ${reason}`);
+    }
+    const instructDot = $('#ass-instruct-dot');
+    if (instructDot.length) {
+        instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red');
+        instructDot.addClass('ass-llm-dot-off');
+        instructDot.attr('title', `Instruct LLM: ${reason}`);
+    }
+}
+
 /**
  * Update the LLM status dots in the extension settings panel.
  * Asks the Agent to probe both backends (the Agent runs server-side

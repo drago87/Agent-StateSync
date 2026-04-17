@@ -19,6 +19,7 @@ import {
 import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
 import { getCharInitType, getCharInitNames } from './char-config.js';
+import { getTrackedFieldsForPayload } from './tracked-fields.js';
 
 // #############################################
 // # 14. Proactive Chat-Changed Hook
@@ -193,8 +194,7 @@ async function attachToExistingSession(origin, sessionId) {
         state.context.chatMetadata[META_KEY_INITIALIZED] = false;
         await state.context.saveMetadata();
 
-        // Re-initialize with current character/group data
-        await initSession(origin, sessionId);
+        // Init is now manual (Button 2) — session linked but not initialized
 
         // Sync config
         state.configSynced = false;
@@ -287,8 +287,7 @@ async function createAndInitSession(origin, chatId) {
         state.context.chatMetadata[META_KEY_COUNTER] = 0;
         await state.context.saveMetadata();
 
-        // Initialize with character/group data
-        await initSession(origin, sessionId);
+        // Init is now manual (Button 2) — session created but not initialized
 
         // Sync config
         state.configSynced = false;
@@ -333,9 +332,7 @@ export async function ensureSession(backendOrigin) {
 
     // --- Check if session already exists in metadata ---
     if (state.context.chatMetadata && state.context.chatMetadata[META_KEY_SESSION]) {
-        if (!state.context.chatMetadata[META_KEY_INITIALIZED]) {
-            await initSession(backendOrigin, state.context.chatMetadata[META_KEY_SESSION]);
-        }
+        // Init is now manual (Button 2)
         return state.context.chatMetadata[META_KEY_SESSION];
     }
 
@@ -365,8 +362,7 @@ export async function ensureSession(backendOrigin) {
         state.context.chatMetadata[META_KEY_COUNTER] = 0;
         await state.context.saveMetadata();
 
-        await initSession(backendOrigin, sessionId);
-
+        // Init is now manual (Button 2)
         return sessionId;
     } catch (err) {
         console.error(`[${EXTENSION_NAME}] Fallback session creation failed:`, err);
@@ -574,6 +570,12 @@ function buildSingleCharInitPayload() {
         payload.persona = persona;
     }
 
+    // Tracked fields for the Agent's state database
+    const trackedFields = getTrackedFieldsForPayload();
+    if (trackedFields) {
+        payload.tracked_fields = trackedFields;
+    }
+
     console.log(`[${EXTENSION_NAME}] Single-char init: type=${cardType}, name="${cardName}"`);
 
     return payload;
@@ -650,6 +652,12 @@ function buildGroupInitPayload() {
         payload.persona = persona;
     }
 
+    // Tracked fields for the Agent's state database
+    const trackedFields = getTrackedFieldsForPayload();
+    if (trackedFields) {
+        payload.tracked_fields = trackedFields;
+    }
+
     console.log(`[${EXTENSION_NAME}] Group init: "${state.activeGroup.name}" with ${memberPayloads.length} members`);
     console.log(`[${EXTENSION_NAME}] group_scenario: ${groupScenario ? 'yes' : 'no'}`);
 
@@ -690,10 +698,89 @@ export async function initSession(backendOrigin, sessionId) {
             state.context.chatMetadata[META_KEY_INITIALIZED] = true;
             await state.context.saveMetadata();
             updateStatus('Session initialized', '#5cb85c');
+            return true;
         } else {
-            console.warn(`[${EXTENSION_NAME}] Session init returned ${resp.status}. Will retry on next request.`);
+            console.warn(`[${EXTENSION_NAME}] Session init returned ${resp.status}.`);
+            return false;
         }
     } catch (err) {
         console.warn(`[${EXTENSION_NAME}] Session init failed (Agent may be starting up):`, err.message);
+        return false;
     }
+}
+
+/**
+ * Manually send the init payload to the Agent.
+ * Triggered by Button 2 (Init Session button near the text area).
+ * Creates a session if one doesn't exist yet, then sends character/group data.
+ *
+ * @returns {boolean} true if init succeeded, false otherwise
+ */
+export async function manualInitSession() {
+    const settings = getSettings();
+    if (!settings.enabled) {
+        toastr.info('Enable State Sync first.', 'Agent-StateSync');
+        return false;
+    }
+
+    const origin = getAgentOrigin();
+    if (!origin) {
+        toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
+        return false;
+    }
+
+    let sessionId = state.context.chatMetadata?.[META_KEY_SESSION];
+
+    // Create session if one doesn't exist yet
+    if (!sessionId) {
+        const chatId = typeof state.context.getCurrentChatId === 'function'
+            ? state.context.getCurrentChatId() : null;
+
+        try {
+            updateStatus('Creating session...', '#f0ad4e');
+
+            const resp = await fetch(`${origin}/api/sessions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ st_chat_id: chatId || '' }),
+            });
+
+            if (!resp.ok) throw new Error(`Session API returned ${resp.status}`);
+            const data = await resp.json();
+            if (!data.session_id) throw new Error('Invalid session response');
+
+            sessionId = data.session_id;
+
+            state.context.chatMetadata = state.context.chatMetadata || {};
+            state.context.chatMetadata[META_KEY_SESSION] = sessionId;
+            state.context.chatMetadata[META_KEY_COUNTER] = 0;
+            await state.context.saveMetadata();
+
+            console.log(`[${EXTENSION_NAME}] Manual session created: ${sessionId}`);
+        } catch (err) {
+            console.error(`[${EXTENSION_NAME}] Manual session creation failed:`, err);
+            toastr.error(`Session creation failed: ${err.message}`, 'Agent-StateSync');
+            updateStatus('Session creation failed', '#d9534f');
+            return false;
+        }
+    }
+
+    // Send init payload
+    const success = await initSession(origin, sessionId);
+
+    if (success) {
+        const shortId = sessionId.substring(0, 8);
+        const chatLabel = state.isGroupChat && state.activeGroup
+            ? `Group "${state.activeGroup.name}"`
+            : `"${state.context.name2 || 'Unknown'}"`;
+        toastr.success(`Initialized: ${chatLabel} (${shortId}...)`, 'Agent-StateSync');
+    } else {
+        toastr.error('Init failed \u2014 check console (F12)', 'Agent-StateSync');
+    }
+
+    // Sync config after init
+    state.configSynced = false;
+    await syncConfigToAgent(settings, origin);
+
+    return success;
 }
