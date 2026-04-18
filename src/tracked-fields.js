@@ -7,7 +7,7 @@
 // The merged data is included in the session init payload.
 
 import state from './state.js';
-import defaultConfig from './default-config.json';
+import defaultConfig from './default-config.js';
 
 // Settings key for user customizations
 const TRACKED_FIELDS_KEY = 'agent_statesync_tracked_fields';

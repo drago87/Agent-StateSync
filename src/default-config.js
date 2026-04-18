@@ -1,4 +1,4 @@
-{
+export default {
     "debug": false,
     "tracked_fields": {
         "character": {
@@ -136,4 +136,4 @@
             "discoveries": { "type": "dict", "hint": "Key-value pairs of new information" }
         }
     }
-}
+};

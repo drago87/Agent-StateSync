@@ -579,29 +579,28 @@ export function injectCharConfigButton() {
 // #############################################
 
 /**
- * Inject an "Init Session" button into SillyTavern's chat controls area.
- * Allows manual initialization of the Agent session for the current chat.
+ * Inject an "Init Session" button into the GG menu buttons container.
+ * Hidden by default; shown when a chat needs initialization.
+ * Hidden again after a successful init.
  */
 export function injectInitButton() {
     if ($('#ass-init-session-btn').length) return; // Already injected
 
-    const $sendForm = $('#send_form');
-    if (!$sendForm.length) {
-        // ST not ready yet - retry
+    const $container = $('#gg-menu-buttons-container');
+    if (!$container.length) {
+        // GG container not ready yet - retry
         setTimeout(injectInitButton, 1000);
         return;
     }
 
     const $btn = $(`
-        <div id="ass-init-session-btn" style="display:inline-flex; margin:0 4px; align-items:center;">
-            <button class="ass-init-btn menu_button" type="button" title="Initialize Agent session for this chat">
-                <i class="fa-solid fa-rocket"></i>
-                Init Session
-            </button>
+        <div id="ass-init-session-btn" class="gg_menu_button" style="display:none;">
+            <i class="fa-solid fa-rocket"></i>
+            <span>Init Session</span>
         </div>
     `);
 
-    $sendForm.before($btn);
+    $container.append($btn);
 
     $btn.on('click', async function () {
         const settings = getSettings();
@@ -616,23 +615,40 @@ export function injectInitButton() {
             return;
         }
 
-        const $button = $btn.find('button');
-        $button.prop('disabled', true);
+        $btn.css('opacity', '0.5').css('pointer-events', 'none');
         toastr.info('Initializing Agent session...', 'Agent-StateSync');
 
         try {
             const success = await manualInitSession();
             if (success) {
                 toastr.success('Agent session initialized!', 'Agent-StateSync');
+                $btn.hide(); // Hide after successful init
+                state.sessionInitialized = true;
             } else {
                 toastr.warning('Init failed. Check console for details.', 'Agent-StateSync');
             }
         } catch (err) {
             toastr.error(`Init failed: ${err.message}`, 'Agent-StateSync');
         } finally {
-            $button.prop('disabled', false);
+            $btn.css('opacity', '').css('pointer-events', '');
         }
     });
+}
+
+/**
+ * Show or hide the init button based on whether the current chat
+ * already has an initialized session.
+ * Call this on chat-changed and after page load.
+ */
+export function updateInitButtonVisibility() {
+    const $btn = $('#ass-init-session-btn');
+    if (!$btn.length) return;
+
+    if (state.sessionInitialized) {
+        $btn.hide();
+    } else {
+        $btn.show();
+    }
 }
 
 // #############################################
@@ -662,8 +678,10 @@ export function hookChatEvents() {
             const settings = getSettings();
             if (settings.enabled) {
                 startHealthChecks();
-                // Proactive session setup for the new chat
-                proactiveChatChanged();
+                // Proactive session setup for the new chat (silent)
+                proactiveChatChanged().then(() => {
+                    updateInitButtonVisibility();
+                });
             }
         });
     }
@@ -730,6 +748,7 @@ export function init(debug = false) {
             setTimeout(async () => {
                 try {
                     await proactiveChatChanged();
+                    updateInitButtonVisibility();
                 } catch (e) {
                     console.warn(`[${EXTENSION_NAME}] Initial proactive setup failed:`, e.message);
                 }
