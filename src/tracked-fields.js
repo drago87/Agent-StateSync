@@ -5,7 +5,7 @@
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Defaults come from default-config.json; user edits saved to ST extensionSettings.
 // The merged data is included in the session init payload.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import defaultConfig from './default-config.js';
@@ -132,7 +132,6 @@ function renderSimpleField(category, key, field) {
 
 function renderGroupField(category, key, field) {
     const description = field.description || '';
-    const extendsOnly = field.extends_only || false;
     const isDynamic = field.is_dynamic || false;
     const fields = field.fields || {};
 
@@ -148,9 +147,6 @@ function renderGroupField(category, key, field) {
                    placeholder="Group name" style="flex:1; min-width:0;">
             <input class="text_pole ass-tf-desc" value="${escapeAttr(description)}"
                    placeholder="Description" style="flex:3; min-width:0;">
-            <label class="ass-tf-extends-label" title="Only extends this and will not overwrite">
-                <input type="checkbox" class="ass-tf-extends" ${extendsOnly ? 'checked' : ''}>
-            </label>
             <label class="ass-tf-dyn-label" title="Dynamic — entries keyed by name">
                 <input type="checkbox" class="ass-tf-dynamic" ${isDynamic ? 'checked' : ''}>
                 <small>Dyn</small>
@@ -174,6 +170,7 @@ function renderGroupField(category, key, field) {
 function renderSubFieldRow(key, field) {
     const type = field.type || 'string';
     const hint = field.hint || '';
+    const extendsOnly = field.extends_only || false;
 
     return `
     <div class="ass-tf-row ass-tf-subfield-row" data-subkey="${escapeAttr(key)}">
@@ -184,6 +181,9 @@ function renderSubFieldRow(key, field) {
         </select>
         <input class="text_pole ass-tf-sub-hint" value="${escapeAttr(hint)}"
                placeholder="Hint" style="flex:2; min-width:0;">
+        <label class="ass-tf-extends-label" title="Only extends this and will not overwrite">
+            <input type="checkbox" class="ass-tf-extends" ${extendsOnly ? 'checked' : ''}>
+        </label>
         <button class="menu_button ass-tf-remove-subfield" title="Remove sub-field">
             <i class="fa-solid fa-xmark"></i>
         </button>
@@ -239,7 +239,6 @@ function handleFieldEdit($input) {
 
     if (isGroup(field)) {
         field.description = $field.find('.ass-tf-desc').val().trim();
-        field.extends_only = $field.find('.ass-tf-extends').is(':checked');
         field.is_dynamic = $field.find('.ass-tf-dynamic').is(':checked');
     } else {
         field.type = $field.find('.ass-tf-type').val();
@@ -263,6 +262,7 @@ function handleFieldEdit($input) {
         }
         subField.type = $subrow.find('.ass-tf-sub-type').val();
         subField.hint = $subrow.find('.ass-tf-sub-hint').val().trim();
+        subField.extends_only = $subrow.find('.ass-tf-extends').is(':checked');
     }
 }
 
@@ -295,13 +295,14 @@ function addSubFieldToGroup(category, key) {
         field.fields[subName] = {
             type: field.type || 'string',
             hint: field.hint || '',
+            extends_only: false,
         };
         field.description = field.hint || '';
         delete field.type;
         delete field.hint;
     } else {
         const subName = 'new_sub_' + Date.now();
-        field.fields[subName] = { type: 'string', hint: '' };
+        field.fields[subName] = { type: 'string', hint: '', extends_only: false };
     }
 
     renderAllCategories($('#ass-tracked-fields-container'));

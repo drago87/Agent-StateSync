@@ -5,6 +5,7 @@
 // the character card: as a single character, multiple characters,
 // or a scenario.  Stored per-character in the card's data.extensions
 // so it persists on export/import.
+// File Version: 1.0.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
