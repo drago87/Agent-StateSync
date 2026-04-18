@@ -2,6 +2,7 @@
 //
 // Settings panel HTML/CSS, event bindings, character config button,
 // chat-changed event hook, and the main initialization IIFE.
+// File Version: 1.0.0
 
 import state from './state.js';
 import {
@@ -594,9 +595,8 @@ export function injectInitButton() {
     }
 
     const $btn = $(`
-        <div id="ass-init-session-btn" class="gg_menu_button" style="display:none;">
+        <div id="ass-init-session-btn" class="gg_menu_button" style="display:none;" title="Initialize the current chat">
             <i class="fa-solid fa-rocket"></i>
-            <span>Init Session</span>
         </div>
     `);
 

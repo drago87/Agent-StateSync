@@ -2,6 +2,7 @@
 //
 // Webpack entry. Imports and initializes the extension.
 // manifest.json points to dist/index.js (the built output).
+// File Version: 1.0.0
 
 import defaultConfig from './default-config.js';
 import { init } from './ui.js';

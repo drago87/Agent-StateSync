@@ -3,6 +3,7 @@
 // Fetches group data from SillyTavern's server API, finds the active group
 // for the current chat, resolves member avatars to full Character objects,
 // and caches everything for the interceptor pipeline.
+// File Version: 1.0.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';

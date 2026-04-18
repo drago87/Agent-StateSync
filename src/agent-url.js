@@ -2,6 +2,7 @@
 //
 // Auto-detects the Agent URL from SillyTavern's Custom Endpoint setting.
 // Manages health check pinging, LLM status display, and reconnect logic.
+// File Version: 1.0.0
 
 import state from './state.js';
 import {

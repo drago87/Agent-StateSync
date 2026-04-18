@@ -5,6 +5,7 @@
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Defaults come from default-config.json; user edits saved to ST extensionSettings.
 // The merged data is included in the session init payload.
+// File Version: 1.0.0
 
 import state from './state.js';
 import defaultConfig from './default-config.js';

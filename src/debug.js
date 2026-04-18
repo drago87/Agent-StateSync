@@ -2,6 +2,7 @@
 //
 // Executes diagnostic commands and returns formatted output strings
 // for display in the debug panel textbox.
+// File Version: 1.0.0
 
 import state from './state.js';
 import {

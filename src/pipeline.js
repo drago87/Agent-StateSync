@@ -3,6 +3,7 @@
 // The main interception pipeline: message type detection, history trimming,
 // [SYSTEM_META] tag construction, dummy bypass responses, and the
 // fetch interceptor that ties everything together.
+// File Version: 1.0.0
 
 import state from './state.js';
 import {

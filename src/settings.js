@@ -2,6 +2,7 @@
 //
 // All constant definitions, default settings, settings CRUD operations,
 // and small utility functions (hashing, status text, debug output).
+// File Version: 1.0.0
 
 import state from './state.js';
 

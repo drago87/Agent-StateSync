@@ -259,25 +259,34 @@ function injectBrainCSS() {
 function injectBrainButton() {
     if ($('#ass-brain-btn').length) return;
 
-    // Find the Character Sheet Bar by looking for the skull button (rightmost icon).
-    // ST typically uses #entity_del for the skull/delete character button.
-    const $skull = $('#entity_del');
-    if ($skull.length) {
-        const $btn = $('<div id="ass-brain-btn" title="Agent Character Config"><i class="fa-solid fa-brain"></i></div>');
-        $skull.after($btn);
-        $btn.on('click', toggleCharConfigPanel);
-        console.log(`[${EXTENSION_NAME}] Brain button injected (after #entity_del)`);
+    const $btn = $('<div id="ass-brain-btn" title="Agent Character Config"><i class="fa-solid fa-brain"></i></div>');
+    $btn.on('click', toggleCharConfigPanel);
+
+    // Primary target: avatar controls button bar
+    const $bar = $('#avatar_controls .buttons_block');
+    if ($bar.length) {
+        $bar.append($btn);
+        console.log(`[${EXTENSION_NAME}] Brain button injected (in #avatar_controls .buttons_block)`);
         return;
     }
 
-    // Fallback: try the star button
-    const $star = $('#fav_button');
-    if ($star.length) {
-        const $btn = $('<div id="ass-brain-btn" title="Agent Character Config"><i class="fa-solid fa-brain"></i></div>');
-        $star.after($btn);
-        $btn.on('click', toggleCharConfigPanel);
-        console.log(`[${EXTENSION_NAME}] Brain button injected (after #fav_button)`);
-        return;
+    // Fallback targets
+    const targets = [
+        '#entity_del',
+        '#delete_character_button',
+        '.character_menu_button[title*="Delete"]',
+        '#entity_export',
+        '#entity_lock',
+        '#fav_button',
+    ];
+
+    for (const selector of targets) {
+        const $target = $(selector);
+        if ($target.length) {
+            $target.after($btn);
+            console.log(`[${EXTENSION_NAME}] Brain button injected (after ${selector})`);
+            return;
+        }
     }
 
     // ST not ready yet — retry

@@ -2,13 +2,7 @@
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
-//
-// v3.0 — New init payload format:
-//   - Card types: plain character, scenario, multi-character
-//   - first_mes from chat messages (not card field)
-//   - Group chat: members ordered by first message in chat
-//   - group_scenario logic: include at top or per-member
-//   - Empty fields excluded from payload
+// File Version: 1.0.0
 
 import state from './state.js';
 import {
