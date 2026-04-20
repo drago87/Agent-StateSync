@@ -9,7 +9,7 @@
 // Also contains:
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (per-character extra fields)
-// File Version: 1.1.3
+// File Version: 1.2.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -30,34 +30,61 @@ const DEFAULT_CHAR_CONFIG = {
 };
 
 // #############################################
-// # Character Data Access
+// # Panel Character Resolution
 // #############################################
 
+// Captured character ID when panel opens (needed for group chat character editing)
+let panelCharId = null;
+
 /**
- * Get the character data object for the currently active character.
+ * Find the character ID by matching the avatar image filename
+ * in the character editing view against state.context.characters.
+ * This works in group chat where state.context.characterId is null,
+ * and handles duplicate character names correctly since avatar filenames
+ * are always unique (Belle.png, Belle_1.png, etc.).
  */
-function getActiveCharData() {
-    if (state.context.characterId == null || !state.context.characters) return null;
-    return state.context.characters[state.context.characterId] || null;
+function findCharIdByAvatar() {
+    const avatarImg = document.querySelector('#avatar_div img, #avatar_div .avatar img');
+    if (!avatarImg?.src) return null;
+
+    try {
+        const url = new URL(avatarImg.src);
+        const file = url.searchParams.get('file');
+        if (!file) return null;
+
+        if (!state.context.characters) return null;
+        for (const [id, char] of Object.entries(state.context.characters)) {
+            if (char.avatar === file) return id;
+        }
+    } catch (e) {
+        // URL parse failed
+    }
+    return null;
 }
+
+// #############################################
+// # Character Data Access
+// #############################################
 
 /**
  * Read the stored character config from the active character's card data.
  * Returns a validated copy of the stored config, or the defaults.
  */
 function readCharConfig() {
-    const char = getActiveCharData();
-    if (!char?.data?.extensions) return { ...DEFAULT_CHAR_CONFIG, names: [''] };
-    const stored = char.data.extensions[CHAR_CONFIG_EXT_KEY];
-    if (!stored) return { ...DEFAULT_CHAR_CONFIG, names: [''] };
-    return {
-        mode: (stored.mode === 'scenario') ? 'scenario' : 'characters',
-        names: Array.isArray(stored.names) && stored.names.length > 0
-            ? [...stored.names]
-            : [''],
-        prompt_settings: stored.prompt_settings || {},
-        tracked_field_additions: stored.tracked_field_additions || {},
-    };
+    const charId = panelCharId ?? state.context.characterId;
+    const char = charId != null ? state.context.characters?.[charId] : null;
+
+    if (char?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]) {
+        const stored = char.data.extensions[CHAR_CONFIG_EXT_KEY];
+        return {
+            mode: (stored.mode === 'scenario') ? 'scenario' : 'characters',
+            names: Array.isArray(stored.names) && stored.names.length > 0 ? [...stored.names] : [''],
+            prompt_settings: stored.prompt_settings || {},
+            tracked_field_additions: stored.tracked_field_additions || {},
+        };
+    }
+
+    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings: {}, tracked_field_additions: {} };
 }
 
 /**
@@ -65,9 +92,11 @@ function readCharConfig() {
  * and trigger a debounced save.
  */
 function writeCharConfig(config) {
-    const char = getActiveCharData();
+    const charId = panelCharId ?? state.context.characterId;
+    const char = charId != null ? state.context.characters?.[charId] : null;
+
     if (!char) {
-        console.warn(`[${EXTENSION_NAME}] No active character — cannot save char config`);
+        console.warn(`[${EXTENSION_NAME}] No active character (panelCharId=${panelCharId}, contextCharId=${state.context.characterId}) — cannot save`);
         return;
     }
     if (!char.data) char.data = {};
@@ -79,14 +108,14 @@ function writeCharConfig(config) {
         tracked_field_additions: config.tracked_field_additions || {},
     };
 
-    try {
-        if (typeof state.context.saveCharacterDebounced === 'function') {
-            state.context.saveCharacterDebounced();
-        } else if (typeof state.context.saveChat === 'function') {
-            state.context.saveChat();
-        }
-    } catch (e) {
-        console.warn(`[${EXTENSION_NAME}] Character save failed:`, e.message);
+    if (typeof state.context.saveCharacterDebounced === 'function') {
+        state.context.saveCharacterDebounced();
+    } else if (typeof state.context.saveChat === 'function') {
+        state.context.saveChat();
+    } else if (typeof state.context.saveCharacter === 'function') {
+        state.context.saveCharacter();
+    } else {
+        console.warn(`[${EXTENSION_NAME}] No character save function found. Data is in memory but may not persist.`);
     }
 }
 
@@ -118,9 +147,8 @@ export function getCharInitNames() {
  * Returns null if no overrides exist.
  */
 export function getCharPromptOverrides() {
-    const char = getActiveCharData();
-    if (!char?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]) return null;
-    const overrides = char.data.extensions[CHAR_CONFIG_EXT_KEY].prompt_settings;
+    const config = readCharConfig();
+    const overrides = config.prompt_settings;
     if (!overrides || typeof overrides !== 'object' || Object.keys(overrides).length === 0) return null;
     return overrides;
 }
@@ -130,9 +158,8 @@ export function getCharPromptOverrides() {
  * Returns null if no additions exist.
  */
 export function getCharTrackedFieldAdditions() {
-    const char = getActiveCharData();
-    if (!char?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]) return null;
-    const additions = char.data.extensions[CHAR_CONFIG_EXT_KEY].tracked_field_additions;
+    const config = readCharConfig();
+    const additions = config.tracked_field_additions;
     if (!additions || typeof additions !== 'object' || Object.keys(additions).length === 0) return null;
     return additions;
 }
@@ -251,7 +278,7 @@ function injectBrainCSS() {
             font-size: 11px;
             opacity: 0.7;
         }
-		
+        
         .ass-brain-section details summary {
             cursor: pointer;
             padding: 4px 0;
@@ -418,8 +445,11 @@ function toggleCharConfigPanel() {
 
 function openCharConfigPanel() {
     if ($('#ass-brain-overlay').length) return;
-    console.log('[ASS DEBUG] OPEN - characterId:', state.context.characterId,
-                'char exists:', !!state.context.characters?.[state.context.characterId]);
+
+    // Capture which character is being viewed
+    // Works for both single-char (context.characterId) and group chat
+    // (matches avatar image filename against characters map)
+    panelCharId = findCharIdByAvatar() || state.context.characterId || null;
 
     const config = readCharConfig();
 
@@ -539,7 +569,7 @@ function openCharConfigPanel() {
         triggerAutoSave();
     });
 
-    // Bind prompt override events
+    // Bind prompt override events (toggle visibility for Language Custom input)
     bindCharPromptOverrideEvents();
 
     // Auto-save when prompt overrides change
@@ -551,8 +581,7 @@ function openCharConfigPanel() {
 }
 
 function closeCharConfigPanel() {
-    console.log('[ASS DEBUG] CLOSE - characterId:', state.context.characterId,
-                'char exists:', !!state.context.characters?.[state.context.characterId]);
+    // Force save before removing DOM
     if (autoSaveTimer) {
         clearTimeout(autoSaveTimer);
         autoSaveTimer = null;
@@ -560,11 +589,7 @@ function closeCharConfigPanel() {
     const config = readCurrentConfig();
     writeCharConfig(config);
 
-    // DEBUG: verify what we just wrote
-    const verify = readCharConfig();
-    console.log('[ASS DEBUG] Saved prompt_settings:', verify.prompt_settings);
-    console.log('[ASS DEBUG] Saved tf_additions:', verify.tracked_field_additions);
-    console.log('[ASS DEBUG] Save fn exists:', typeof state.context.saveCharacterDebounced);
+    panelCharId = null; // Clear captured character ID
 
     $('#ass-brain-overlay').remove();
     $(document).off('keydown.brain-panel');
@@ -750,7 +775,7 @@ function readTFAdditionsFromUI() {
     const additions = {};
     $('#ass-brain-tf-additions .ass-btf-field').each(function () {
         const $field = $(this);
-        const oldKey = String($field.data('tf-key'));
+        const oldKey = String($field.attr('data-tf-key'));
         const name = $field.find('> .ass-btf-row > .ass-btf-name').val().trim();
         if (!name) return;
 
@@ -761,7 +786,7 @@ function readTFAdditionsFromUI() {
                 fields: {},
             };
             $field.find('.ass-btf-subfield-row').each(function () {
-                const subOldKey = String($(this).data('tf-subkey'));
+                const subOldKey = String($(this).attr('data-tf-subkey'));
                 const subName = $(this).find('.ass-btf-sub-name').val().trim();
                 if (!subName) return;
                 group.fields[subName] = {
@@ -811,7 +836,7 @@ function bindTFAdditionEvents() {
     // Remove field
     $container.on('click', '.ass-btf-remove-field', function () {
         const config = readCurrentConfig();
-        const oldKey = String($(this).closest('.ass-btf-field').data('tf-key'));
+        const oldKey = String($(this).closest('.ass-btf-field').attr('data-tf-key'));
         delete config.tracked_field_additions[oldKey];
         $('#ass-brain-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
         bindTFAdditionEvents();
@@ -821,7 +846,7 @@ function bindTFAdditionEvents() {
     // Convert simple to group
     $container.on('click', '.ass-btf-add-sub-to-field', function () {
         const config = readCurrentConfig();
-        const oldKey = String($(this).closest('.ass-btf-field').data('tf-key'));
+        const oldKey = String($(this).closest('.ass-btf-field').attr('data-tf-key'));
         const field = config.tracked_field_additions[oldKey];
         if (!field || isTFGroup(field)) return;
 
@@ -845,7 +870,7 @@ function bindTFAdditionEvents() {
     // Add sub-field to group
     $container.on('click', '.ass-btf-add-subfield', function () {
         const config = readCurrentConfig();
-        const groupKey = String($(this).closest('.ass-btf-field').data('tf-key'));
+        const groupKey = String($(this).closest('.ass-btf-field').attr('data-tf-key'));
         const group = config.tracked_field_additions[groupKey];
         if (!group) return;
 
@@ -862,8 +887,8 @@ function bindTFAdditionEvents() {
     $container.on('click', '.ass-btf-remove-subfield', function () {
         const config = readCurrentConfig();
         const $group = $(this).closest('.ass-btf-field');
-        const groupKey = String($group.data('tf-key'));
-        const subKey = String($(this).closest('.ass-btf-subfield-row').data('tf-subkey'));
+        const groupKey = String($group.attr('data-tf-key'));
+        const subKey = String($(this).closest('.ass-btf-subfield-row').attr('data-tf-subkey'));
         const group = config.tracked_field_additions[groupKey];
         if (!group?.fields) return;
 
