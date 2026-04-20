@@ -5,7 +5,7 @@
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Defaults come from default-config.json; user edits saved to ST extensionSettings.
 // The merged data is included in the session init payload.
-// File Version: 1.0.1
+// File Version: 1.0.3
 
 import state from './state.js';
 import defaultConfig from './default-config.js';
@@ -194,11 +194,63 @@ function isGroup(field) {
     return field && field.fields !== undefined;
 }
 
+/**
+ * Read all current DOM values and sync them into currentFields.
+ * Ensures data model is perfectly in sync before any re-render.
+ */
+function syncFieldsFromDOM() {
+    $('#ass-tracked-fields-container .ass-tf-field').each(function () {
+        const $field = $(this);
+        const category = $field.attr('data-category');
+        const oldKey = String($field.attr('data-key'));
+        const field = currentFields[category]?.[oldKey];
+        if (!field) return;
+
+        // Sync parent field name
+        const newName = $field.find('> .ass-tf-row > .ass-tf-name').val().trim();
+        if (newName && newName !== oldKey) {
+            delete currentFields[category][oldKey];
+            currentFields[category][newName] = field;
+        }
+
+        if (isGroup(field)) {
+            field.description = $field.find('.ass-tf-desc').val().trim();
+            field.is_dynamic = $field.find('.ass-tf-dynamic').is(':checked');
+
+            // Sync all sub-fields
+            $field.find('.ass-tf-subfield-row').each(function () {
+                const $subrow = $(this);
+                const subOldKey = String($subrow.attr('data-subkey'));
+                const subField = field.fields[subOldKey];
+                if (!subField) return;
+
+                const subNewName = $subrow.find('.ass-tf-sub-name').val().trim();
+                if (subNewName && subNewName !== subOldKey) {
+                    delete field.fields[subOldKey];
+                    field.fields[subNewName] = subField;
+                }
+
+                subField.type = $subrow.find('.ass-tf-sub-type').val();
+                subField.hint = $subrow.find('.ass-tf-sub-hint').val().trim();
+                subField.extends_only = $subrow.find('.ass-tf-extends').is(':checked');
+            });
+        } else {
+            field.type = $field.find('.ass-tf-type').val();
+            field.hint = $field.find('.ass-tf-hint').val().trim();
+            field.extends_only = $field.find('.ass-tf-extends').is(':checked');
+        }
+    });
+}
+
 // #############################################
 // # Render All
 // #############################################
 
 function renderAllCategories($container) {
+    // Flush all pending DOM edits into currentFields before re-rendering.
+    // This prevents stale data when adding/removing fields.
+    syncFieldsFromDOM();
+
     const categories = [
         { key: 'character', label: 'Character', open: true },
         { key: 'scenario',  label: 'Scenario',  open: false },
@@ -223,8 +275,8 @@ function handleFieldEdit($input) {
     const $field = $input.closest('.ass-tf-field');
     if (!$field.length) return;
 
-    const category = $field.data('category');
-    const oldKey = String($field.data('key'));
+    const category = $field.attr('data-category');
+    const oldKey = String($field.attr('data-key'));
     const field = currentFields[category]?.[oldKey];
     if (!field) return;
 
@@ -250,7 +302,7 @@ function handleFieldEdit($input) {
     if ($input.hasClass('ass-tf-sub-name') || $input.hasClass('ass-tf-sub-type') || $input.hasClass('ass-tf-sub-hint')) {
         if (!field.fields) return;
         const $subrow = $input.closest('.ass-tf-subfield-row');
-        const subOldKey = String($subrow.data('subkey'));
+        const subOldKey = String($subrow.attr('data-subkey'));
         const subField = field.fields[subOldKey];
         if (!subField) return;
 
@@ -348,31 +400,31 @@ function bindEvents($container) {
 
     // Add field to category
     $container.on('click', '.ass-tf-add-field', function () {
-        addField($(this).data('category'));
+        addField($(this).attr('data-category'));
     });
 
     // Remove field (simple or group)
     $container.on('click', '.ass-tf-remove-field', function () {
         const $field = $(this).closest('.ass-tf-field');
-        removeField($field.data('category'), $field.data('key'));
+        removeField($field.attr('data-category'), $field.attr('data-key'));
     });
 
     // Add sub-field to existing group
     $container.on('click', '.ass-tf-add-subfield', function () {
-        addSubFieldToGroup($(this).data('category'), $(this).data('key'));
+        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
     });
 
     // Convert simple field to group (via sitemap icon)
     $container.on('click', '.ass-tf-add-sub-to-field', function () {
         const $field = $(this).closest('.ass-tf-field');
-        addSubFieldToGroup($field.data('category'), $field.data('key'));
+        addSubFieldToGroup($field.attr('data-category'), $field.attr('data-key'));
     });
 
     // Remove sub-field
     $container.on('click', '.ass-tf-remove-subfield', function () {
         const $subrow = $(this).closest('.ass-tf-subfield-row');
         const $field = $subrow.closest('.ass-tf-field');
-        removeSubField($field.data('category'), $field.data('key'), $subrow.data('subkey'));
+        removeSubField($field.attr('data-category'), $field.attr('data-key'), $subrow.attr('data-subkey'));
     });
 }
 
