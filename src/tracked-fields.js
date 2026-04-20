@@ -5,7 +5,7 @@
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Defaults come from default-config.json; user edits saved to ST extensionSettings.
 // The merged data is included in the session init payload.
-// File Version: 1.0.3
+// File Version: 1.0.4
 
 import state from './state.js';
 import defaultConfig from './default-config.js';
@@ -207,14 +207,14 @@ function syncFieldsFromDOM() {
         if (!field) return;
 
         // Sync parent field name
-        const newName = $field.find('> .ass-tf-row > .ass-tf-name').val().trim();
+        const newName = ($field.find('> .ass-tf-row > .ass-tf-name').val() || '').trim();
         if (newName && newName !== oldKey) {
             delete currentFields[category][oldKey];
             currentFields[category][newName] = field;
         }
 
         if (isGroup(field)) {
-            field.description = $field.find('.ass-tf-desc').val().trim();
+            field.description = ($field.find('.ass-tf-desc').val() || '').trim();
             field.is_dynamic = $field.find('.ass-tf-dynamic').is(':checked');
 
             // Sync all sub-fields
@@ -224,20 +224,19 @@ function syncFieldsFromDOM() {
                 const subField = field.fields[subOldKey];
                 if (!subField) return;
 
-                const subNewName = $subrow.find('.ass-tf-sub-name').val().trim();
+                const subNewName = ($subrow.find('.ass-tf-sub-name').val() || '').trim();
                 if (subNewName && subNewName !== subOldKey) {
                     delete field.fields[subOldKey];
                     field.fields[subNewName] = subField;
                 }
 
                 subField.type = $subrow.find('.ass-tf-sub-type').val();
-                subField.hint = $subrow.find('.ass-tf-sub-hint').val().trim();
+                subField.hint = ($subrow.find('.ass-tf-sub-hint').val() || '').trim();
                 subField.extends_only = $subrow.find('.ass-tf-extends').is(':checked');
             });
         } else {
             field.type = $field.find('.ass-tf-type').val();
-            field.hint = $field.find('.ass-tf-hint').val().trim();
-            field.extends_only = $field.find('.ass-tf-extends').is(':checked');
+            field.hint = ($field.find('.ass-tf-hint').val() || '').trim();
         }
     });
 }
@@ -280,9 +279,9 @@ function handleFieldEdit($input) {
     const field = currentFields[category]?.[oldKey];
     if (!field) return;
 
-    const newName = $field.find('> .ass-tf-row > .ass-tf-name').val().trim();
+   
+    const newName = ($field.find('> .ass-tf-row > .ass-tf-name').val() || '').trim();
 
-    // Rename key if the name changed
     if (newName && newName !== oldKey) {
         delete currentFields[category][oldKey];
         currentFields[category][newName] = field;
@@ -290,15 +289,14 @@ function handleFieldEdit($input) {
     }
 
     if (isGroup(field)) {
-        field.description = $field.find('.ass-tf-desc').val().trim();
+        field.description = ($field.find('.ass-tf-desc').val() || '').trim();
         field.is_dynamic = $field.find('.ass-tf-dynamic').is(':checked');
     } else {
         field.type = $field.find('.ass-tf-type').val();
-        field.hint = $field.find('.ass-tf-hint').val().trim();
+        field.hint = ($field.find('.ass-tf-hint').val() || '').trim();
         field.extends_only = $field.find('.ass-tf-extends').is(':checked');
     }
 
-    // Sub-field edits
     if ($input.hasClass('ass-tf-sub-name') || $input.hasClass('ass-tf-sub-type') || $input.hasClass('ass-tf-sub-hint')) {
         if (!field.fields) return;
         const $subrow = $input.closest('.ass-tf-subfield-row');
@@ -306,14 +304,14 @@ function handleFieldEdit($input) {
         const subField = field.fields[subOldKey];
         if (!subField) return;
 
-        const subNewName = $subrow.find('.ass-tf-sub-name').val().trim();
+        const subNewName = ($subrow.find('.ass-tf-sub-name').val() || '').trim();
         if (subNewName && subNewName !== subOldKey) {
             delete field.fields[subOldKey];
             field.fields[subNewName] = subField;
             $subrow.attr('data-subkey', subNewName);
         }
         subField.type = $subrow.find('.ass-tf-sub-type').val();
-        subField.hint = $subrow.find('.ass-tf-sub-hint').val().trim();
+        subField.hint = ($subrow.find('.ass-tf-sub-hint').val() || '').trim();
         subField.extends_only = $subrow.find('.ass-tf-extends').is(':checked');
     }
 }
@@ -385,43 +383,39 @@ function removeSubField(category, key, subKey) {
 // #############################################
 
 function bindEvents($container) {
-    // Input changes — update data model, debounced save
-    $container.on('input', '.ass-tf-name, .ass-tf-hint, .ass-tf-desc, .ass-tf-type, ' +
+
+    $container.off('.ass-tf');
+
+    $container.on('input.ass-tf', '.ass-tf-name, .ass-tf-hint, .ass-tf-desc, .ass-tf-type, ' +
         '.ass-tf-sub-name, .ass-tf-sub-type, .ass-tf-sub-hint', function () {
         handleFieldEdit($(this));
         scheduleSave();
     });
 
-    // Checkbox changes
-    $container.on('change', '.ass-tf-extends, .ass-tf-dynamic', function () {
+    $container.on('change.ass-tf', '.ass-tf-extends, .ass-tf-dynamic', function () {
         handleFieldEdit($(this));
         scheduleSave();
     });
 
-    // Add field to category
-    $container.on('click', '.ass-tf-add-field', function () {
+    $container.on('click.ass-tf', '.ass-tf-add-field', function () {
         addField($(this).attr('data-category'));
     });
 
-    // Remove field (simple or group)
-    $container.on('click', '.ass-tf-remove-field', function () {
+    $container.on('click.ass-tf', '.ass-tf-remove-field', function () {
         const $field = $(this).closest('.ass-tf-field');
         removeField($field.attr('data-category'), $field.attr('data-key'));
     });
 
-    // Add sub-field to existing group
-    $container.on('click', '.ass-tf-add-subfield', function () {
+    $container.on('click.ass-tf', '.ass-tf-add-subfield', function () {
         addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
     });
 
-    // Convert simple field to group (via sitemap icon)
-    $container.on('click', '.ass-tf-add-sub-to-field', function () {
+    $container.on('click.ass-tf', '.ass-tf-add-sub-to-field', function () {
         const $field = $(this).closest('.ass-tf-field');
         addSubFieldToGroup($field.attr('data-category'), $field.attr('data-key'));
     });
 
-    // Remove sub-field
-    $container.on('click', '.ass-tf-remove-subfield', function () {
+    $container.on('click.ass-tf', '.ass-tf-remove-subfield', function () {
         const $subrow = $(this).closest('.ass-tf-subfield-row');
         const $field = $subrow.closest('.ass-tf-field');
         removeSubField($field.attr('data-category'), $field.attr('data-key'), $subrow.attr('data-subkey'));
