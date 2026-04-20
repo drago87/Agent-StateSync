@@ -9,7 +9,7 @@
 // Also contains:
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (per-character extra fields)
-// File Version: 1.1.1
+// File Version: 1.1.3
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -540,11 +540,23 @@ function openCharConfigPanel() {
     // Bind prompt override events
     bindCharPromptOverrideEvents();
 
+    // Auto-save when prompt overrides change
+    $('#ass-brain-prompt-overrides').on('change', '.ass-ps-char-override, .ass-ps-char-override-type', triggerAutoSave);
+    $('#ass-brain-prompt-overrides').on('input', '.ass-ps-char-override-text', triggerAutoSave);
+
     // Bind tracked field addition events
     bindTFAdditionEvents();
 }
 
 function closeCharConfigPanel() {
+    // Force save before removing DOM
+    if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = null;
+    }
+    const config = readCurrentConfig();
+    writeCharConfig(config);
+
     $('#ass-brain-overlay').remove();
     $(document).off('keydown.brain-panel');
     $(document).off('change.ass-ps-override');
