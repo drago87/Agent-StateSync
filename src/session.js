@@ -2,7 +2,7 @@
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -12,7 +12,8 @@ import {
 } from './settings.js';
 import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
-import { getCharInitType, getCharInitNames } from './char-config.js';
+import { getCharInitType, getCharInitNames, getCharPromptOverrides, getCharTrackedFieldAdditions } from './char-config.js';
+import { buildPromptSettingsPayload } from './settings.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
 
 // #############################################
@@ -419,9 +420,23 @@ function buildSingleCharInitPayload() {
         payload.persona = persona;
     }
 
+    // Tracked fields for the Agent's state database
     const trackedFields = getTrackedFieldsForPayload();
+
+    // Merge per-character tracked field additions
+    const charAdditions = getCharTrackedFieldAdditions();
+    if (charAdditions) {
+        trackedFields.character = { ...trackedFields.character, ...charAdditions };
+    }
+
     if (trackedFields) {
         payload.tracked_fields = trackedFields;
+    }
+
+    // Prompt settings (global merged with char overrides)
+    const promptSettings = buildPromptSettingsPayload(getCharPromptOverrides());
+    if (promptSettings) {
+        payload.prompt_settings = promptSettings;
     }
 
     console.log(`[${EXTENSION_NAME}] Single-char init: type=${cardType}, name="${cardName}"`);
@@ -487,9 +502,23 @@ function buildGroupInitPayload() {
         payload.persona = persona;
     }
 
+    // Tracked fields for the Agent's state database
     const trackedFields = getTrackedFieldsForPayload();
+
+    // Merge per-character tracked field additions (use first active member)
+    const charAdditions = getCharTrackedFieldAdditions();
+    if (charAdditions) {
+        trackedFields.character = { ...trackedFields.character, ...charAdditions };
+    }
+
     if (trackedFields) {
         payload.tracked_fields = trackedFields;
+    }
+
+    // Prompt settings (global merged with char overrides)
+    const promptSettings = buildPromptSettingsPayload(getCharPromptOverrides());
+    if (promptSettings) {
+        payload.prompt_settings = promptSettings;
     }
 
     console.log(`[${EXTENSION_NAME}] Group init: "${state.activeGroup.name}" with ${memberPayloads.length} members`);

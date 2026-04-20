@@ -1,6 +1,19 @@
-// File Version: 1.0.0
+// File Version: 1.0.1
 export default {
     "debug": false,
+	"prompt_settings": {
+        "perspective": "third_person_limited",
+        "tense": "present",
+        "tone": "literary",
+        "content_rating": "nsfw",
+        "extraction_strictness": "moderate",
+        "detail_level": "standard",
+        "language": "English",
+        "relationship_depth": "standard",
+        "character_voice_in_state": false,
+        "state_granularity": "summary",
+        "translation_length": "standard"
+    },
     "tracked_fields": {
         "character": {
             "physical": {

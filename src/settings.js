@@ -2,9 +2,10 @@
 //
 // All constant definitions, default settings, settings CRUD operations,
 // and small utility functions (hashing, status text, debug output).
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
+import defaultConfig from './default-config.js';
 
 // #############################################
 // # 1. Constants & Default Settings
@@ -15,6 +16,7 @@ export const SETTINGS_KEY = 'agent_statesync_settings';
 export const META_KEY_SESSION = 'world_session_id';
 export const META_KEY_COUNTER = 'ass_msg_counter';
 export const META_KEY_INITIALIZED = 'ass_session_initialized';
+export const PROMPT_SETTINGS_KEY = 'agent_statesync_prompt_settings';
 
 // Key used to store character config data inside the character card's
 // data.extensions object.  Persists with the card on export/import.
@@ -61,6 +63,51 @@ export const defaultSettings = {
     refinementSteps: 0,
     historyCount: 2,
 };
+
+/**
+ * Load prompt settings from ST extensionSettings, falling back to defaults.
+ */
+export function loadPromptSettings() {
+    const saved = state.context.extensionSettings?.[PROMPT_SETTINGS_KEY];
+    if (saved && typeof saved === 'object') return saved;
+    return JSON.parse(JSON.stringify(defaultConfig.prompt_settings));
+}
+
+/**
+ * Save prompt settings to ST extensionSettings.
+ */
+export function savePromptSettings(settings) {
+    state.context.extensionSettings[PROMPT_SETTINGS_KEY] = settings;
+    state.context.saveSettingsDebounced();
+}
+
+/**
+ * Build the final prompt_settings payload for the Agent.
+ * Merges global defaults with per-character overrides.
+ * Per-character overrides only exist for the 8 character-specific settings.
+ *
+ * @param {object|null} charOverrides - From char card extensions, or null
+ * @returns {object} Merged prompt_settings for the init payload
+ */
+export function buildPromptSettingsPayload(charOverrides) {
+    const global = loadPromptSettings();
+    const result = { ...global };
+
+    if (charOverrides && typeof charOverrides === 'object') {
+        // Only the 8 per-character settings can be overridden
+        const overridableKeys = [
+            'perspective', 'tense', 'tone', 'content_rating',
+            'extraction_strictness', 'detail_level', 'language', 'relationship_depth',
+        ];
+        for (const key of overridableKeys) {
+            if (charOverrides[key] !== undefined && charOverrides[key] !== null && charOverrides[key] !== '' && charOverrides[key] !== 'global_default') {
+                result[key] = charOverrides[key];
+            }
+        }
+    }
+
+    return result;
+}
 
 // Debug command definitions for the debug panel dropdown
 export const DEBUG_COMMANDS = [

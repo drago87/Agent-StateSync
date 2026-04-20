@@ -2,7 +2,7 @@
 //
 // Settings panel HTML/CSS, event bindings, character config button,
 // chat-changed event hook, and the main initialization IIFE.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -20,6 +20,7 @@ import { interceptFetch } from './pipeline.js';
 import { executeDebugCommand } from './debug.js';
 import { initCharConfig } from './char-config.js';
 import { initTrackedFieldsUI } from './tracked-fields.js';
+import { initPromptSettingsUI } from './prompt-settings.js';
 
 // #############################################
 // # 10. UI Rendering
@@ -314,8 +315,18 @@ export function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- Tracked Fields Editor (always visible) -->
-                <div id="ass-tracked-fields-container" class="margin-bot-10"></div>
+                <!-- Tracked Fields Editor -->
+                <div class="margin-bot-10">
+                    <label class="title_restorable">
+                        <small><b>Database Tracked Fields</b></small>
+                    </label>
+                    <div id="ass-tracked-fields-container"></div>
+                </div>
+
+                <hr class="sysHR">
+
+                <!-- Prompt Configs -->
+                <div id="ass-prompt-settings-container" class="margin-bot-10"></div>
 
                 <hr class="sysHR">
 
@@ -489,6 +500,9 @@ export function renderSettingsUI() {
 
     // --- Initialize tracked fields UI ---
     initTrackedFieldsUI();
+	
+    // --- Initialize prompt settings UI ---
+    initPromptSettingsUI();
 
     // --- Start health checks if extension is already enabled ---
     if (s.enabled) {
