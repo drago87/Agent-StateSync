@@ -423,7 +423,7 @@ function openCharConfigPanel() {
 
     const html = `
     <div id="ass-brain-overlay" class="ass-brain-overlay">
-        <div class="ass-brain-panel">
+        <div class="ass-brain-panel" id="ass-brain-panel">
 
             <div class="ass-brain-header">
                 <h3><i class="fa-solid fa-brain"></i> Agent Character Config</h3>
