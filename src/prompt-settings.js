@@ -1,7 +1,4 @@
 // prompt-settings.js — Agent-StateSync Prompt Settings Editor
-//
-// Global prompt settings that control how the Agent generates,
-// extracts, and translates content.
 // File Version: 1.0.0
 
 import state from './state.js';
@@ -13,11 +10,11 @@ import {
 // # Settings Definitions
 // #############################################
 
-const PROMPT_SETTINGS_DEFS = [
+export const PROMPT_SETTINGS_DEFS = [
     {
         key: 'perspective',
         label: 'Perspective',
-        hint: 'Controls narrative POV. Per-character override available.',
+        hint: 'Controls narrative POV',
         type: 'select',
         options: [
             { value: 'first_person', label: 'First Person' },
@@ -30,7 +27,7 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'tense',
         label: 'Tense',
-        hint: 'Narrative tense. Per-character override available.',
+        hint: 'Narrative tense',
         type: 'select',
         options: [
             { value: 'past', label: 'Past' },
@@ -41,7 +38,7 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'tone',
         label: 'Tone',
-        hint: 'Narrative voice style. Per-character override available.',
+        hint: 'Narrative voice style',
         type: 'select',
         options: [
             { value: 'casual', label: 'Casual' },
@@ -54,7 +51,7 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'content_rating',
         label: 'Content Rating',
-        hint: 'Controls explicitness of narrative content.',
+        hint: 'Controls explicitness of narrative content',
         type: 'select',
         options: [
             { value: 'sfw', label: 'SFW' },
@@ -66,7 +63,7 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'extraction_strictness',
         label: 'Extraction Strictness',
-        hint: 'How aggressively the Agent extracts state from narrative.',
+        hint: 'How aggressively the Agent extracts state from narrative',
         type: 'select',
         options: [
             { value: 'conservative', label: 'Conservative' },
@@ -78,7 +75,7 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'detail_level',
         label: 'Detail Level',
-        hint: 'How much state to extract per turn.',
+        hint: 'How much state to extract per turn',
         type: 'select',
         options: [
             { value: 'minimal', label: 'Minimal' },
@@ -90,14 +87,14 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'language',
         label: 'Language',
-        hint: 'Language of the RP. Per-character override available.',
+        hint: 'Language of the RP',
         type: 'text',
         perCharacter: true,
     },
     {
         key: 'relationship_depth',
         label: 'Relationship Depth',
-        hint: 'How much detail to track for relationships.',
+        hint: 'How much detail to track for relationships',
         type: 'select',
         options: [
             { value: 'shallow', label: 'Shallow' },
@@ -109,7 +106,7 @@ const PROMPT_SETTINGS_DEFS = [
     {
         key: 'character_voice_in_state',
         label: 'Character Voice in State',
-        hint: 'Translation preserves character speech patterns and quotes.',
+        hint: 'Translation preserves character speech patterns and quotes',
         type: 'checkbox',
         perCharacter: false,
     },
@@ -137,6 +134,10 @@ const PROMPT_SETTINGS_DEFS = [
         perCharacter: false,
     },
 ];
+
+export const CHAR_PROMPT_OVERRIDABLE = PROMPT_SETTINGS_DEFS
+    .filter(d => d.perCharacter)
+    .map(d => d.key);
 
 // #############################################
 // # CSS
@@ -181,55 +182,64 @@ function injectCSS() {
 }
 
 // #############################################
-// # Render
+// # Global Settings Panel Render
 // #############################################
 
-function renderPromptSettings() {
+function renderGlobalSettingRow(def, value) {
+    let inputHtml = '';
+
+    if (def.type === 'select') {
+        const optionsHtml = def.options.map(opt =>
+            `<option value="${opt.value}" ${value === opt.value ? 'selected' : ''}>${opt.label}</option>`
+        ).join('');
+        inputHtml = `<select class="text_pole ass-ps-input" data-key="${def.key}">${optionsHtml}</select>`;
+    } else if (def.type === 'text') {
+        inputHtml = `<input type="text" class="text_pole ass-ps-input" data-key="${def.key}" value="${value || ''}">`;
+    } else if (def.type === 'checkbox') {
+        inputHtml = `<input type="checkbox" class="ass-ps-input" data-key="${def.key}" ${value ? 'checked' : ''}>`;
+    }
+
+    const perCharIcon = def.perCharacter
+        ? `<span class="ass-ps-per-char" title="Per-character override available"><i class="fa-solid fa-user"></i></span>`
+        : '';
+
+    return `
+    <div class="ass-ps-setting" title="${def.hint}">
+        <label>${def.label}</label>
+        ${inputHtml}
+        ${perCharIcon}
+    </div>`;
+}
+
+// #############################################
+// # Global Settings Panel Init
+// #############################################
+
+export function initPromptSettingsUI() {
+    injectCSS();
+
+    const $container = $('#ass-prompt-settings-container');
+    if (!$container.length) return;
+
     const settings = loadPromptSettings();
 
-    const rows = PROMPT_SETTINGS_DEFS.map(def => {
-        let inputHtml = '';
+    const rows = PROMPT_SETTINGS_DEFS.map(def =>
+        renderGlobalSettingRow(def, settings[def.key])
+    ).join('');
 
-        if (def.type === 'select') {
-            const optionsHtml = def.options.map(opt =>
-                `<option value="${opt.value}" ${settings[def.key] === opt.value ? 'selected' : ''}>${opt.label}</option>`
-            ).join('');
-            inputHtml = `<select class="text_pole ass-ps-input" data-key="${def.key}">${optionsHtml}</select>`;
-        } else if (def.type === 'text') {
-            inputHtml = `<input type="text" class="text_pole ass-ps-input" data-key="${def.key}" value="${settings[def.key] || ''}">`;
-        } else if (def.type === 'checkbox') {
-            inputHtml = `<input type="checkbox" class="ass-ps-input" data-key="${def.key}" ${settings[def.key] ? 'checked' : ''}>`;
-        }
+    const html = `
+    <details class="ass-tf-category">
+        <summary><b>Prompt Configs</b></summary>
+        ${rows}
+    </details>`;
 
-        const perCharIcon = def.perCharacter
-            ? `<span class="ass-ps-per-char" title="Per-character override available"><i class="fa-solid fa-user"></i></span>`
-            : '';
+    $container.html(html);
 
-        return `
-        <div class="ass-ps-setting" title="${def.hint}">
-            <label>${def.label}</label>
-            ${inputHtml}
-            ${perCharIcon}
-        </div>`;
-    }).join('');
-
-    return rows;
+    $container.on('change', '.ass-ps-input', saveGlobalFromUI);
+    $container.on('input', '.ass-ps-input', saveGlobalFromUI);
 }
 
-// #############################################
-// # Event Binding
-// #############################################
-
-function bindEvents($container) {
-    $container.on('change', '.ass-ps-input', function () {
-        saveFromUI();
-    });
-    $container.on('input', '.ass-ps-input', function () {
-        saveFromUI();
-    });
-}
-
-function saveFromUI() {
+function saveGlobalFromUI() {
     const settings = loadPromptSettings();
     $('#ass-prompt-settings-container .ass-ps-input').each(function () {
         const key = $(this).data('key');
@@ -246,21 +256,76 @@ function saveFromUI() {
 }
 
 // #############################################
-// # Public API
+// # Char Override Panel Render
 // #############################################
 
-export function initPromptSettingsUI() {
-    injectCSS();
+export function renderCharPromptOverrides(saved) {
+    const perCharDefs = PROMPT_SETTINGS_DEFS.filter(d => d.perCharacter);
 
-    const $container = $('#ass-prompt-settings-container');
-    if (!$container.length) return;
+    const rows = perCharDefs.map(def => {
+        const currentValue = saved?.[def.key] || 'global_default';
 
-    const html = `
-    <details class="ass-tf-category">
-        <summary><b>Prompt Configs</b></summary>
-        ${renderPromptSettings()}
-    </details>`;
+        if (def.type === 'text') {
+            const isGlobal = (currentValue === 'global_default');
+            return `
+            <div class="ass-ps-setting" title="${def.hint}">
+                <label>${def.label}</label>
+                <select class="text_pole ass-ps-char-override-type" data-key="${def.key}">
+                    <option value="global_default" ${isGlobal ? 'selected' : ''}>Global Default</option>
+                    <option value="custom" ${!isGlobal ? 'selected' : ''}>Custom</option>
+                </select>
+                <input type="text" class="text_pole ass-ps-char-override-text"
+                       data-key="${def.key}"
+                       value="${isGlobal ? '' : currentValue}"
+                       placeholder="Custom value..."
+                       style="flex:1; min-width:0; ${isGlobal ? 'display:none;' : ''}">
+            </div>`;
+        }
 
-    $container.html(html);
-    bindEvents($container);
+        const optionsHtml = [
+            `<option value="global_default" ${currentValue === 'global_default' ? 'selected' : ''}>Global Default</option>`,
+            ...def.options.map(opt =>
+                `<option value="${opt.value}" ${currentValue === opt.value ? 'selected' : ''}>${opt.label}</option>`
+            ),
+        ].join('');
+
+        return `
+        <div class="ass-ps-setting" title="${def.hint}">
+            <label>${def.label}</label>
+            <select class="text_pole ass-ps-char-override" data-key="${def.key}">${optionsHtml}</select>
+        </div>`;
+    }).join('');
+
+    return rows;
+}
+
+export function readCharPromptOverridesFromUI() {
+    const overrides = {};
+
+    $('#ass-brain-panel .ass-ps-char-override-type').each(function () {
+        const key = $(this).data('key');
+        const type = $(this).val();
+        if (type === 'custom') {
+            const textVal = $(`#ass-brain-panel .ass-ps-char-override-text[data-key="${key}"]`).val().trim();
+            if (textVal) overrides[key] = textVal;
+        }
+    });
+
+    $('#ass-brain-panel .ass-ps-char-override').each(function () {
+        const key = $(this).data('key');
+        const val = $(this).val();
+        if (val !== 'global_default') {
+            overrides[key] = val;
+        }
+    });
+
+    return overrides;
+}
+
+export function bindCharPromptOverrideEvents() {
+    $(document).on('change', '.ass-ps-char-override-type', function () {
+        const key = $(this).data('key');
+        const isCustom = $(this).val() === 'custom';
+        $(`#ass-brain-panel .ass-ps-char-override-text[data-key="${key}"]`).toggle(isCustom);
+    });
 }
