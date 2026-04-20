@@ -418,6 +418,8 @@ function toggleCharConfigPanel() {
 
 function openCharConfigPanel() {
     if ($('#ass-brain-overlay').length) return;
+    console.log('[ASS DEBUG] OPEN - characterId:', state.context.characterId,
+                'char exists:', !!state.context.characters?.[state.context.characterId]);
 
     const config = readCharConfig();
 
@@ -549,6 +551,8 @@ function openCharConfigPanel() {
 }
 
 function closeCharConfigPanel() {
+    console.log('[ASS DEBUG] CLOSE - characterId:', state.context.characterId,
+                'char exists:', !!state.context.characters?.[state.context.characterId]);
     if (autoSaveTimer) {
         clearTimeout(autoSaveTimer);
         autoSaveTimer = null;
