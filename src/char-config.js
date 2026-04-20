@@ -549,13 +549,18 @@ function openCharConfigPanel() {
 }
 
 function closeCharConfigPanel() {
-    // Force save before removing DOM
     if (autoSaveTimer) {
         clearTimeout(autoSaveTimer);
         autoSaveTimer = null;
     }
     const config = readCurrentConfig();
     writeCharConfig(config);
+
+    // DEBUG: verify what we just wrote
+    const verify = readCharConfig();
+    console.log('[ASS DEBUG] Saved prompt_settings:', verify.prompt_settings);
+    console.log('[ASS DEBUG] Saved tf_additions:', verify.tracked_field_additions);
+    console.log('[ASS DEBUG] Save fn exists:', typeof state.context.saveCharacterDebounced);
 
     $('#ass-brain-overlay').remove();
     $(document).off('keydown.brain-panel');
