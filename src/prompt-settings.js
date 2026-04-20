@@ -1,5 +1,5 @@
 // prompt-settings.js — Agent-StateSync Prompt Settings Editor
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -323,9 +323,14 @@ export function readCharPromptOverridesFromUI() {
 }
 
 export function bindCharPromptOverrideEvents() {
-    $(document).on('change', '.ass-ps-char-override-type', function () {
+    $(document).on('change.ass-ps-override', '.ass-ps-char-override-type', function () {
         const key = $(this).data('key');
         const isCustom = $(this).val() === 'custom';
-        $(`#ass-brain-panel .ass-ps-char-override-text[data-key="${key}"]`).toggle(isCustom);
+        const $input = $(`#ass-brain-panel .ass-ps-char-override-text[data-key="${key}"]`);
+        if (isCustom) {
+            $input.show().css('flex', '1').css('min-width', '0');
+        } else {
+            $input.hide();
+        }
     });
 }

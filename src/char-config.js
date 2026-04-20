@@ -9,7 +9,7 @@
 // Also contains:
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (per-character extra fields)
-// File Version: 1.1.0
+// File Version: 1.1.1
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -251,6 +251,15 @@ function injectBrainCSS() {
             font-size: 11px;
             opacity: 0.7;
         }
+		
+        .ass-brain-section details summary {
+            cursor: pointer;
+            padding: 4px 0;
+            user-select: none;
+        }
+        .ass-brain-section details summary:hover {
+            color: var(--fg);
+        }
 
         /* Field groups */
         .ass-brain-field {
@@ -451,35 +460,39 @@ function openCharConfigPanel() {
 
             <!-- Section 2: Prompt Configs Override -->
             <div class="ass-brain-section">
-                <div class="ass-brain-section-title">
-                    <i class="fa-solid fa-sliders"></i> Prompt Configs Override
-                </div>
-                <div id="ass-brain-prompt-overrides">
-                    ${renderCharPromptOverrides(config.prompt_settings)}
-                </div>
-                <div class="ass-brain-info">
-                    Override global prompt settings for this character only.<br>
-                    Select <b>Global Default</b> to use the value from the main settings.
-                </div>
+                <details>
+                    <summary class="ass-brain-section-title">
+                        <i class="fa-solid fa-sliders"></i> Prompt Configs Override
+                    </summary>
+                    <div id="ass-brain-prompt-overrides">
+                        ${renderCharPromptOverrides(config.prompt_settings)}
+                    </div>
+                    <div class="ass-brain-info">
+                        Override global prompt settings for this character only.<br>
+                        Select <b>Global Default</b> to use the value from the main settings.
+                    </div>
+                </details>
             </div>
 
             <!-- Section 3: Database Tracked Fields Additions -->
             <div class="ass-brain-section">
-                <div class="ass-brain-section-title">
-                    <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
-                </div>
-                <div id="ass-brain-tf-additions">
-                    ${renderTFAdditions(config.tracked_field_additions)}
-                </div>
-                <div style="margin-top:6px;">
-                    <button id="ass-brain-add-tf" class="menu_button" type="button">
-                        <i class="fa-solid fa-plus"></i> Add Field
-                    </button>
-                </div>
-                <div class="ass-brain-info">
-                    Add character-specific fields to track in the state database.<br>
-                    These are merged with the global tracked fields when sending to the Agent.
-                </div>
+                <details>
+                    <summary class="ass-brain-section-title">
+                        <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
+                    </summary>
+                    <div id="ass-brain-tf-additions">
+                        ${renderTFAdditions(config.tracked_field_additions)}
+                    </div>
+                    <div style="margin-top:6px;">
+                        <button id="ass-brain-add-tf" class="menu_button" type="button">
+                            <i class="fa-solid fa-plus"></i> Add Field
+                        </button>
+                    </div>
+                    <div class="ass-brain-info">
+                        Add character-specific fields to track in the state database.<br>
+                        These are merged with the global tracked fields when sending to the Agent.
+                    </div>
+                </details>
             </div>
 
         </div>
@@ -534,6 +547,7 @@ function openCharConfigPanel() {
 function closeCharConfigPanel() {
     $('#ass-brain-overlay').remove();
     $(document).off('keydown.brain-panel');
+    $(document).off('change.ass-ps-override');
 }
 
 // #############################################
