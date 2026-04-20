@@ -9,7 +9,7 @@
 // Also contains:
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (per-character extra fields)
-// File Version: 1.2.0
+// File Version: 1.3.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -775,31 +775,29 @@ function readTFAdditionsFromUI() {
     const additions = {};
     $('#ass-brain-tf-additions .ass-btf-field').each(function () {
         const $field = $(this);
-        const oldKey = String($field.attr('data-tf-key'));
-        const name = $field.find('> .ass-btf-row > .ass-btf-name').val().trim();
+        const name = ($field.find('> .ass-btf-row > .ass-btf-name').val() || '').trim();
         if (!name) return;
 
         if ($field.hasClass('ass-btf-group')) {
             const group = {
-                description: $field.find('.ass-btf-desc').val().trim(),
+                description: ($field.find('.ass-btf-desc').val() || '').trim(),
                 is_dynamic: $field.find('.ass-btf-dynamic').is(':checked'),
                 fields: {},
             };
             $field.find('.ass-btf-subfield-row').each(function () {
-                const subOldKey = String($(this).attr('data-tf-subkey'));
-                const subName = $(this).find('.ass-btf-sub-name').val().trim();
+                const subName = ($(this).find('.ass-btf-sub-name').val() || '').trim();
                 if (!subName) return;
                 group.fields[subName] = {
-                    type: $(this).find('.ass-btf-sub-type').val(),
-                    hint: $(this).find('.ass-btf-sub-hint').val().trim(),
+                    type: $(this).find('.ass-btf-sub-type').val() || 'string',
+                    hint: ($(this).find('.ass-btf-sub-hint').val() || '').trim(),
                     extends_only: $(this).find('.ass-btf-extends').is(':checked'),
                 };
             });
             additions[name] = group;
         } else {
             additions[name] = {
-                type: $field.find('.ass-btf-type').val(),
-                hint: $field.find('.ass-btf-hint').val().trim(),
+                type: $field.find('.ass-btf-type').val() || 'string',
+                hint: ($field.find('.ass-btf-hint').val() || '').trim(),
                 extends_only: $field.find('.ass-btf-extends').is(':checked'),
             };
         }
@@ -807,105 +805,124 @@ function readTFAdditionsFromUI() {
     return additions;
 }
 
+function renderTFContainer(additions) {
+    $('#ass-brain-tf-additions').html(renderTFAdditions(additions));
+}
+
+function handleTFAddField() {
+    const config = readCurrentConfig();
+    const name = 'new_field_' + Date.now();
+    config.tracked_field_additions[name] = {
+        type: 'string',
+        hint: '',
+        extends_only: false,
+    };
+    renderTFContainer(config.tracked_field_additions);
+    triggerAutoSave();
+}
+
+function handleTFRemoveField(button) {
+    const config = readCurrentConfig();
+    const oldKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
+    delete config.tracked_field_additions[oldKey];
+    renderTFContainer(config.tracked_field_additions);
+    triggerAutoSave();
+}
+
+function handleTFConvertToGroup(button) {
+    const config = readCurrentConfig();
+    const oldKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
+    const field = config.tracked_field_additions[oldKey];
+    if (!field || isTFGroup(field)) return;
+
+    const subName = 'sub_1';
+    config.tracked_field_additions[oldKey] = {
+        description: field.hint || '',
+        is_dynamic: false,
+        fields: {
+            [subName]: {
+                type: field.type || 'string',
+                hint: '',
+                extends_only: false,
+            },
+        },
+    };
+    renderTFContainer(config.tracked_field_additions);
+    triggerAutoSave();
+}
+
+function handleTFAddSubField(button) {
+    const config = readCurrentConfig();
+    const groupKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
+    const group = config.tracked_field_additions[groupKey];
+    if (!group) return;
+
+    if (!group.fields) group.fields = {};
+    const subName = 'new_sub_' + Date.now();
+    group.fields[subName] = { type: 'string', hint: '', extends_only: false };
+
+    renderTFContainer(config.tracked_field_additions);
+    triggerAutoSave();
+}
+
+function handleTFRemoveSubField(button) {
+    const config = readCurrentConfig();
+    const $group = $(button).closest('.ass-btf-field');
+    const groupKey = String($group.attr('data-tf-key'));
+    const subKey = String($(button).closest('.ass-btf-subfield-row').attr('data-tf-subkey'));
+    const group = config.tracked_field_additions[groupKey];
+    if (!group?.fields) return;
+
+    delete group.fields[subKey];
+
+    // If no sub-fields left, convert back to simple
+    if (Object.keys(group.fields).length === 0) {
+        config.tracked_field_additions[groupKey] = {
+            type: 'string',
+            hint: group.description || '',
+            extends_only: false,
+        };
+    }
+
+    renderTFContainer(config.tracked_field_additions);
+    triggerAutoSave();
+}
+
+/**
+ * Bind tracked field addition events ONCE.
+ * Delegated events on the container survive re-renders.
+ * Direct event on #ass-brain-add-tf is bound once here.
+ * NEVER call this function again — it would accumulate handlers.
+ */
 function bindTFAdditionEvents() {
     const $container = $('#ass-brain-tf-additions');
 
-    // Input changes
+    // Input/checkbox changes (delegated)
     $container.on('input', '.ass-btf-name, .ass-btf-hint, .ass-btf-desc, .ass-btf-type, ' +
-        '.ass-btf-sub-name, .ass-btf-sub-type, .ass-btf-sub-hint', function () {
-        triggerAutoSave();
-    });
-    $container.on('change', '.ass-btf-extends, .ass-btf-dynamic', function () {
-        triggerAutoSave();
-    });
+        '.ass-btf-sub-name, .ass-btf-sub-type, .ass-btf-sub-hint', triggerAutoSave);
+    $container.on('change', '.ass-btf-extends, .ass-btf-dynamic', triggerAutoSave);
 
-    // Add field
-    $('#ass-brain-add-tf').on('click', function () {
-        const config = readCurrentConfig();
-        const name = 'new_field_' + Date.now();
-        config.tracked_field_additions[name] = {
-            type: 'string',
-            hint: '',
-            extends_only: false,
-        };
-        $('#ass-brain-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
-        bindTFAdditionEvents();
-        triggerAutoSave();
-    });
+    // Add field (direct — button is outside the container)
+    $('#ass-brain-add-tf').on('click', handleTFAddField);
 
-    // Remove field
+    // Remove field (delegated)
     $container.on('click', '.ass-btf-remove-field', function () {
-        const config = readCurrentConfig();
-        const oldKey = String($(this).closest('.ass-btf-field').attr('data-tf-key'));
-        delete config.tracked_field_additions[oldKey];
-        $('#ass-brain-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
-        bindTFAdditionEvents();
-        triggerAutoSave();
+        handleTFRemoveField(this);
     });
 
-    // Convert simple to group
+    // Convert simple to group (delegated)
     $container.on('click', '.ass-btf-add-sub-to-field', function () {
-        const config = readCurrentConfig();
-        const oldKey = String($(this).closest('.ass-btf-field').attr('data-tf-key'));
-        const field = config.tracked_field_additions[oldKey];
-        if (!field || isTFGroup(field)) return;
-
-        const subName = 'sub_1';
-        config.tracked_field_additions[oldKey] = {
-            description: field.hint || '',
-            is_dynamic: false,
-            fields: {
-                [subName]: {
-                    type: field.type || 'string',
-                    hint: '',
-                    extends_only: false,
-                },
-            },
-        };
-        $('#ass-brain-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
-        bindTFAdditionEvents();
-        triggerAutoSave();
+        handleTFConvertToGroup(this);
     });
 
-    // Add sub-field to group
+    // Add sub-field to group (delegated)
     $container.on('click', '.ass-btf-add-subfield', function () {
-        const config = readCurrentConfig();
-        const groupKey = String($(this).closest('.ass-btf-field').attr('data-tf-key'));
-        const group = config.tracked_field_additions[groupKey];
-        if (!group) return;
-
-        if (!group.fields) group.fields = {};
-        const subName = 'new_sub_' + Date.now();
-        group.fields[subName] = { type: 'string', hint: '', extends_only: false };
-
-        $('#ass-brain-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
-        bindTFAdditionEvents();
-        triggerAutoSave();
+        handleTFAddSubField(this);
     });
 
-    // Remove sub-field
+    // Remove sub-field (delegated)
     $container.on('click', '.ass-btf-remove-subfield', function () {
-        const config = readCurrentConfig();
-        const $group = $(this).closest('.ass-btf-field');
-        const groupKey = String($group.attr('data-tf-key'));
-        const subKey = String($(this).closest('.ass-btf-subfield-row').attr('data-tf-subkey'));
-        const group = config.tracked_field_additions[groupKey];
-        if (!group?.fields) return;
-
-        delete group.fields[subKey];
-
-        // If no sub-fields left, convert back to simple
-        if (Object.keys(group.fields).length === 0) {
-            config.tracked_field_additions[groupKey] = {
-                type: 'string',
-                hint: group.description || '',
-                extends_only: false,
-            };
-        }
-
-        $('#ass-brain-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
-        bindTFAdditionEvents();
-        triggerAutoSave();
+        handleTFRemoveSubField(this);
     });
 }
 
