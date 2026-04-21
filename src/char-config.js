@@ -632,7 +632,6 @@ function openCharConfigPanel() {
     $('#ass-brain-mode').on('change', function () {
         const mode = $(this).val();
         $('#ass-brain-names-section').toggle(mode === 'characters');
-        triggerAutoSave();
     });
 
     // Add character button
@@ -642,16 +641,11 @@ function openCharConfigPanel() {
         renderNameInputs(config.names);
         const $inputs = $('#ass-brain-names-list .ass-brain-name-input');
         $inputs.last().focus();
-        triggerAutoSave();
     });
 
     // Bind prompt override events (toggle visibility for Language Custom input)
     bindCharPromptOverrideEvents();
-
-    // Auto-save when prompt overrides change
-    $('#ass-brain-prompt-overrides').on('change', '.ass-ps-char-override, .ass-ps-char-override-type', triggerAutoSave);
-    $('#ass-brain-prompt-overrides').on('input', '.ass-ps-char-override-text', triggerAutoSave);
-
+	
     // Bind tracked field addition events
     bindTFAdditionEvents();
 }
@@ -972,11 +966,6 @@ function handleTFRemoveSubField(button) {
  */
 function bindTFAdditionEvents() {
     const $container = $('#ass-brain-tf-additions');
-
-    // Input/checkbox changes (delegated)
-    $container.on('input', '.ass-btf-name, .ass-btf-hint, .ass-btf-desc, .ass-btf-type, ' +
-        '.ass-btf-sub-name, .ass-btf-sub-type, .ass-btf-sub-hint', triggerAutoSave);
-    $container.on('change', '.ass-btf-extends, .ass-btf-dynamic', triggerAutoSave);
 
     // Add field (direct — button is outside the container)
     $('#ass-brain-add-tf').on('click', handleTFAddField);
