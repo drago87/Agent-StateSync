@@ -44,16 +44,24 @@ let panelCharId = null;
  * are always unique (Belle.png, Belle_1.png, etc.).
  */
 function findCharIdByAvatar() {
-    const thumb = $('#ass-brain-avatar-preview img').first();
-    if (!thumb.length) {
-        console.log('[ASS] findCharIdByAvatar: no avatar img found in panel');
+    // Try to find the avatar from any available source
+    let avatarImg = null;
+
+    // Source 1: SillyTavern character sheet avatar
+    avatarImg = document.querySelector('#avatar_div img, #avatar_div .avatar img');
+
+    // Source 2: Brain panel avatar (if panel already open, e.g. after panel re-render)
+    if (!avatarImg?.src) {
+        const panelThumb = $('#ass-brain-avatar-preview img').first();
+        if (panelThumb.length && panelThumb.attr('src')) {
+            avatarImg = panelThumb[0];
+        }
+    }
+
+    if (!avatarImg?.src) {
+        console.log('[ASS] findCharIdByAvatar: no avatar img found');
         return null;
     }
-    const src = thumb.attr('src') || '';
-    console.log('[ASS] findCharIdByAvatar: img src =', src);
-	
-    const avatarImg = document.querySelector('#avatar_div img, #avatar_div .avatar img');
-    if (!avatarImg?.src) return null;
 
     try {
         const url = new URL(avatarImg.src);
