@@ -2,10 +2,11 @@
 //
 // Webpack entry. Imports and initializes the extension.
 // manifest.json points to dist/index.js (the built output).
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import defaultConfig from './default-config.js';
 import { init } from './ui.js';
+import { registerSlashCommands } from './commands.js';
 
 (async function main() {
     let config = { ...defaultConfig };
@@ -20,5 +21,6 @@ import { init } from './ui.js';
             }
         }
     } catch (e) {}
-    init(config.debug === true);
+    await init(config.debug === true);
+    registerSlashCommands();
 })();
