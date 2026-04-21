@@ -44,6 +44,14 @@ let panelCharId = null;
  * are always unique (Belle.png, Belle_1.png, etc.).
  */
 function findCharIdByAvatar() {
+    const thumb = $('#ass-brain-avatar-preview img').first();
+    if (!thumb.length) {
+        console.log('[ASS] findCharIdByAvatar: no avatar img found in panel');
+        return null;
+    }
+    const src = thumb.attr('src') || '';
+    console.log('[ASS] findCharIdByAvatar: img src =', src);
+	
     const avatarImg = document.querySelector('#avatar_div img, #avatar_div .avatar img');
     if (!avatarImg?.src) return null;
 
@@ -472,6 +480,7 @@ function openCharConfigPanel() {
     // Works for both single-char (context.characterId) and group chat
     // (matches avatar image filename against characters map)
     panelCharId = findCharIdByAvatar() || state.context.characterId || null;
+	console.log('[ASS] panelCharId after findCharIdByAvatar:', panelCharId);
 
     const config = readCharConfig();
 
