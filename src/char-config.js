@@ -59,7 +59,6 @@ function findCharIdByAvatar() {
     }
 
     if (!avatarImg?.src) {
-        console.log('[ASS] findCharIdByAvatar: no avatar img found');
         return null;
     }
 
@@ -525,7 +524,6 @@ function openCharConfigPanel() {
     // Works for both single-char (context.characterId) and group chat
     // (matches avatar image filename against characters map)
     panelCharId = findCharIdByAvatar() || state.context.characterId || null;
-	console.log('[ASS] panelCharId after findCharIdByAvatar:', panelCharId);
 
     const config = readCharConfig();
 
@@ -651,15 +649,10 @@ function openCharConfigPanel() {
 }
 
 function closeCharConfigPanel() {
-    // Force save before removing DOM
-    if (autoSaveTimer) {
-        clearTimeout(autoSaveTimer);
-        autoSaveTimer = null;
-    }
     const config = readCurrentConfig();
     writeCharConfig(config);
 
-    panelCharId = null; // Clear captured character ID
+    panelCharId = null;
 
     $('#ass-brain-overlay').remove();
     $(document).off('keydown.brain-panel');
@@ -712,12 +705,10 @@ function renderNameInputs(names) {
 
         $list.append($row);
 
-        $row.find('.ass-brain-name-input').on('input', triggerAutoSave);
         $row.find('.ass-brain-remove-name').on('click', function () {
             const config = readCurrentConfig();
             config.names.splice(index, 1);
             renderNameInputs(config.names);
-            triggerAutoSave();
         });
     });
 }
@@ -888,7 +879,6 @@ function handleTFAddField() {
         extends_only: false,
     };
     renderTFContainer(config.tracked_field_additions);
-    triggerAutoSave();
 }
 
 function handleTFRemoveField(button) {
@@ -896,7 +886,6 @@ function handleTFRemoveField(button) {
     const oldKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
     delete config.tracked_field_additions[oldKey];
     renderTFContainer(config.tracked_field_additions);
-    triggerAutoSave();
 }
 
 function handleTFConvertToGroup(button) {
@@ -918,7 +907,6 @@ function handleTFConvertToGroup(button) {
         },
     };
     renderTFContainer(config.tracked_field_additions);
-    triggerAutoSave();
 }
 
 function handleTFAddSubField(button) {
@@ -932,7 +920,6 @@ function handleTFAddSubField(button) {
     group.fields[subName] = { type: 'string', hint: '', extends_only: false };
 
     renderTFContainer(config.tracked_field_additions);
-    triggerAutoSave();
 }
 
 function handleTFRemoveSubField(button) {
@@ -955,7 +942,6 @@ function handleTFRemoveSubField(button) {
     }
 
     renderTFContainer(config.tracked_field_additions);
-    triggerAutoSave();
 }
 
 /**
@@ -989,20 +975,6 @@ function bindTFAdditionEvents() {
     $container.on('click', '.ass-btf-remove-subfield', function () {
         handleTFRemoveSubField(this);
     });
-}
-
-// #############################################
-// # Auto-Save (debounced)
-// #############################################
-
-let autoSaveTimer = null;
-
-function triggerAutoSave() {
-    if (autoSaveTimer) clearTimeout(autoSaveTimer);
-    autoSaveTimer = setTimeout(function () {
-        const config = readCurrentConfig();
-        writeCharConfig(config);
-    }, 500);
 }
 
 // #############################################
