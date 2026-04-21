@@ -2,7 +2,7 @@
 //
 // Settings panel HTML/CSS, event bindings, character config button,
 // chat-changed event hook, and the main initialization IIFE.
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import state from './state.js';
 import {
@@ -154,28 +154,28 @@ export function injectCustomCSS() {
             box-shadow: none;
         }
 
-        /* Init Session button */
-        .ass-init-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 12px;
-            border: 1px solid rgba(92, 184, 92, 0.4);
-            border-radius: 4px;
-            background: rgba(92, 184, 92, 0.15);
-            color: #5cb85c;
-            font-size: 12px;
-            cursor: pointer;
-            transition: background 0.2s, border-color 0.2s;
-        }
-        .ass-init-btn:hover {
-            background: rgba(92, 184, 92, 0.3);
-            border-color: rgba(92, 184, 92, 0.6);
-        }
-        .ass-init-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
+		/* Init Session button */
+		.ass-init-btn {
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			padding: 4px 12px;
+			border: 1px solid rgba(92, 184, 92, 0.4);
+			border-radius: 4px;
+			background: rgba(92, 184, 92, 0.15);
+			color: #5cb85c;
+			font-size: 12px;
+			cursor: pointer;
+			transition: background 0.2s, border-color 0.2s;
+		}
+		.ass-init-btn:hover {
+			background: rgba(92, 184, 92, 0.3);
+			border-color: rgba(92, 184, 92, 0.6);
+		}
+		.ass-init-btn:disabled {
+			opacity: 0.5;
+			cursor: not-allowed;
+		}
     </style>`;
 
     $('head').append(css);
