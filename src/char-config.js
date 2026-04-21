@@ -9,7 +9,7 @@
 // Also contains:
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (per-character extra fields)
-// File Version: 1.3.0
+// File Version: 1.3.1
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -154,6 +154,17 @@ export function getCharPromptOverrides() {
 }
 
 /**
+ * Get prompt config overrides for a specific character object.
+ * Works in group mode where getActiveCharData() returns null.
+ */
+export function getPromptOverridesForChar(charObj) {
+    if (!charObj?.data?.extensions) return null;
+    const extData = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
+    if (!extData?.prompt_overrides) return null;
+    return JSON.parse(JSON.stringify(extData.prompt_overrides));
+}
+
+/**
  * Get the per-character tracked field additions.
  * Returns null if no additions exist.
  */
@@ -162,6 +173,17 @@ export function getCharTrackedFieldAdditions() {
     const additions = config.tracked_field_additions;
     if (!additions || typeof additions !== 'object' || Object.keys(additions).length === 0) return null;
     return additions;
+}
+
+/**
+ * Get tracked field additions for a specific character object.
+ * Works in group mode where getActiveCharData() returns null.
+ */
+export function getTrackedFieldAdditionsForChar(charObj) {
+    if (!charObj?.data?.extensions) return null;
+    const extData = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
+    if (!extData?.[TF_ADDITIONS_KEY]) return null;
+    return JSON.parse(JSON.stringify(extData[TF_ADDITIONS_KEY]));
 }
 
 // #############################################

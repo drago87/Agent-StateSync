@@ -2,7 +2,7 @@
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import state from './state.js';
 import {
@@ -12,7 +12,7 @@ import {
 } from './settings.js';
 import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
-import { getCharInitType, getCharInitNames, getCharPromptOverrides, getCharTrackedFieldAdditions } from './char-config.js';
+import { getCharInitType, getCharInitNames, getCharPromptOverrides, getCharTrackedFieldAdditions, getTrackedFieldAdditionsForChar, getPromptOverridesForChar } from './char-config.js';
 import { buildPromptSettingsPayload } from './settings.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
 
@@ -373,6 +373,18 @@ function buildGroupMemberPayload(charObj, firstMes) {
         member.scenario = cardData;
     } else {
         member.character = cardData;
+    }
+	
+	// Add per-character tracked field additions (if any)
+    const charTFAdditions = getTrackedFieldAdditionsForChar(charObj);
+    if (charTFAdditions) {
+        member.tracked_fields_additions = charTFAdditions;
+    }
+	
+	// Add per-character prompt overrides (if any)
+    const charPromptOverrides = getPromptOverridesForChar(charObj);
+    if (charPromptOverrides) {
+        member.prompt_overrides = charPromptOverrides;
     }
 
     return member;
