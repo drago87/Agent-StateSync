@@ -115,30 +115,61 @@ function writeCharConfig(config) {
         console.warn(`[${EXTENSION_NAME}] No active character (panelCharId=${panelCharId}, contextCharId=${state.context.characterId}) — cannot save`);
         return;
     }
-    if (!char.data) char.data = {};
-    if (!char.data.extensions) char.data.extensions = {};
-    char.data.extensions[CHAR_CONFIG_EXT_KEY] = {
+
+    const configData = {
         mode: config.mode || 'characters',
         names: config.names || [''],
         prompt_settings: config.prompt_settings || {},
         tracked_field_additions: config.tracked_field_additions || {},
     };
 
-    // DEBUG: verify it was written
-    console.log(`[${EXTENSION_NAME}] writeCharConfig: saved to charId=${charId}, data=`, JSON.stringify(char.data.extensions[CHAR_CONFIG_EXT_KEY]));
+    // Write to in-memory object (keeps it available without reload)
+    if (!char.data) char.data = {};
+    if (!char.data.extensions) char.data.extensions = {};
+    char.data.extensions[CHAR_CONFIG_EXT_KEY] = configData;
 
-    if (typeof state.context.saveCharacterDebounced === 'function') {
-        console.log(`[${EXTENSION_NAME}] writeCharConfig: calling saveCharacterDebounced()`);
-        state.context.saveCharacterDebounced();
-    } else if (typeof state.context.saveChat === 'function') {
-        console.log(`[${EXTENSION_NAME}] writeCharConfig: calling saveChat()`);
-        state.context.saveChat();
-    } else if (typeof state.context.saveCharacter === 'function') {
-        console.log(`[${EXTENSION_NAME}] writeCharConfig: calling saveCharacter()`);
-        state.context.saveCharacter();
+    // Persist to character card file
+    if (typeof state.context.writeExtensionField === 'function') {
+        state.context.writeExtensionField(charId, CHAR_CONFIG_EXT_KEY, configData)
+            .then(() => {
+                console.log(`[${EXTENSION_NAME}] writeCharConfig: persisted via writeExtensionField`);
+            })
+            .catch(err => {
+                console.warn(`[${EXTENSION_NAME}] writeExtensionField failed:`, err);
+                // Fallback: try merge-attributes API
+                fallbackMergeAttributes(char, configData);
+            });
     } else {
-        console.warn(`[${EXTENSION_NAME}] No character save function found. Data is in memory but may not persist.`);
+        console.warn(`[${EXTENSION_NAME}] writeExtensionField not available, trying merge-attributes`);
+        fallbackMergeAttributes(char, configData);
     }
+}
+
+function fallbackMergeAttributes(char, configData) {
+    const avatar = char.avatar;
+    if (!avatar) return;
+    fetch('/api/characters/merge-attributes', {
+        method: 'POST',
+        headers: state.context.getRequestHeaders(),
+        body: JSON.stringify({
+            avatar: avatar,
+            data: {
+                extensions: {
+                    [CHAR_CONFIG_EXT_KEY]: configData,
+                },
+            },
+        }),
+    })
+        .then(resp => {
+            if (resp.ok) {
+                console.log(`[${EXTENSION_NAME}] writeCharConfig: persisted via merge-attributes`);
+            } else {
+                console.warn(`[${EXTENSION_NAME}] merge-attributes returned ${resp.status}`);
+            }
+        })
+        .catch(err => {
+            console.warn(`[${EXTENSION_NAME}] merge-attributes failed:`, err);
+        });
 }
 
 // #############################################
