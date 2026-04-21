@@ -154,27 +154,9 @@ export function injectCustomCSS() {
             box-shadow: none;
         }
 
-		/* Init Session button */
-		.ass-init-btn {
-			display: inline-flex;
-			align-items: center;
-			gap: 4px;
-			padding: 4px 12px;
-			border: 1px solid rgba(92, 184, 92, 0.4);
-			border-radius: 4px;
-			background: rgba(92, 184, 92, 0.15);
-			color: #5cb85c;
-			font-size: 12px;
+		/* Init Session button (rocket icon in chat controls) */
+		#ass-init-session-btn {
 			cursor: pointer;
-			transition: background 0.2s, border-color 0.2s;
-		}
-		.ass-init-btn:hover {
-			background: rgba(92, 184, 92, 0.3);
-			border-color: rgba(92, 184, 92, 0.6);
-		}
-		.ass-init-btn:disabled {
-			opacity: 0.5;
-			cursor: not-allowed;
 		}
     </style>`;
 
@@ -609,9 +591,7 @@ export function injectInitButton() {
     }
 
     const $btn = $(`
-        <div id="ass-init-session-btn" class="gg_menu_button" style="display:none;" title="Initialize the current chat">
-            <i class="fa-solid fa-rocket"></i>
-        </div>
+        <div id="ass-init-session-btn" class="gg-menu-button fa-solid fa-rocket interactable" style="display:none;" title="Initialize the current chat" tabindex="0"></div>
     `);
 
     $container.append($btn);
