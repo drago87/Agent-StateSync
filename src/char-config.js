@@ -182,8 +182,8 @@ export function getCharTrackedFieldAdditions() {
 export function getTrackedFieldAdditionsForChar(charObj) {
     if (!charObj?.data?.extensions) return null;
     const extData = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
-    if (!extData?.[TF_ADDITIONS_KEY]) return null;
-    return JSON.parse(JSON.stringify(extData[TF_ADDITIONS_KEY]));
+    if (!extData?.tracked_field_additions) return null;
+    return JSON.parse(JSON.stringify(extData.tracked_field_additions));
 }
 
 // #############################################
