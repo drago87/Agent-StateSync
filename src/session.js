@@ -2,7 +2,7 @@
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
-// File Version: 1.0.3
+// File Version: 1.1.0
 
 import state from './state.js';
 import {
@@ -15,6 +15,7 @@ import { loadGroupData } from './groups.js';
 import { getCharInitType, getCharInitNames, getCharPromptOverrides, getCharTrackedFieldAdditions, getTrackedFieldAdditionsForChar, getPromptOverridesForChar } from './char-config.js';
 import { buildPromptSettingsPayload } from './settings.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
+import { startNotificationPolling, stopNotificationPolling } from './notifications.js';
 
 // #############################################
 // # 14. Proactive Chat-Changed Hook
@@ -147,6 +148,9 @@ async function proactiveChatChangedWithId(origin, chatId) {
             state.context.chatMetadata[META_KEY_INITIALIZED] = true;
             await state.context.saveMetadata();
             state.sessionInitialized = true;
+			
+			// Start notification polling
+            startNotificationPolling();
 
             // Sync config
             state.configSynced = false;
@@ -170,6 +174,9 @@ async function proactiveChatChangedWithId(origin, chatId) {
                 console.warn(`[${EXTENSION_NAME}] Failed to re-link session:`, e.message);
             }
             state.sessionInitialized = true;
+			
+			// Start notification polling
+            startNotificationPolling();
 
             state.configSynced = false;
             try { await syncConfigToAgent(getSettings(), origin); } catch (_) {}
@@ -639,6 +646,8 @@ export async function manualInitSession() {
 
     if (success) {
         state.sessionInitialized = true;
+		// Start notification polling
+		startNotificationPolling();
         const shortId = sessionId.substring(0, 8);
         const chatLabel = state.isGroupChat && state.activeGroup
             ? `Group "${state.activeGroup.name}"`
