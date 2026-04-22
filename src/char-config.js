@@ -233,8 +233,18 @@ function writeCharConfig(config) {
     if (!char.data.extensions) char.data.extensions = {};
     char.data.extensions[CHAR_CONFIG_EXT_KEY] = configData;
 
+    // Update ST's internal state (used by export/import, character editor, etc.)
+    if (typeof state.context.writeExtensionField === 'function') {
+        try {
+            state.context.writeExtensionField(charId, CHAR_CONFIG_EXT_KEY, configData);
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] writeExtensionField error:`, e);
+        }
+    }
+
     // Persist to character card file via merge-attributes API.
-    // Single call — arrays replace entirely, no ghost fields.
+    // Arrays replace entirely on deep merge — no ghost fields.
+    // Single call, no null step needed.
     const avatar = char.avatar;
     if (!avatar) return;
 
