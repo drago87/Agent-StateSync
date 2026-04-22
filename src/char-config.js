@@ -9,7 +9,13 @@
 // Also contains:
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (per-character extra fields)
-// File Version: 1.3.1
+//
+// tracked_field_additions uses ARRAY storage format (v2):
+//   [{ name: "FieldName", type: "string", hint: "", extends_only: false }, ...]
+//   Group: [{ name: "Group", description: "", is_dynamic: false, fields: [...] }, ...]
+//   Arrays replace entirely on merge — no ghost fields after F5.
+//
+// File Version: 1.4.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -26,7 +32,7 @@ const DEFAULT_CHAR_CONFIG = {
     mode: 'characters',   // 'characters' | 'scenario'
     names: [''],          // array of character name strings
     prompt_settings: {},  // per-character prompt overrides
-    tracked_field_additions: {},  // extra tracked fields for this character
+    tracked_field_additions: [],  // ARRAY of field entries (v2 format)
 };
 
 // #############################################
@@ -78,12 +84,92 @@ function findCharIdByAvatar() {
 }
 
 // #############################################
+// # Array ↔ Object Migration
+// #############################################
+
+/**
+ * Migrate old object-format tracked_field_additions to new array format.
+ * Old: { "FieldName": { type, hint, extends_only } }
+ * New: [{ name: "FieldName", type, hint, extends_only }]
+ * Also migrates group sub-fields from object to array.
+ */
+function migrateTFAdditionsToArray(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj || [];
+    return Object.entries(obj).map(([name, field]) => {
+        if (field && field.fields !== undefined) {
+            // Group field — migrate sub-fields too
+            return {
+                name: name,
+                description: field.description || '',
+                is_dynamic: field.is_dynamic || false,
+                fields: Object.entries(field.fields || {}).map(([subName, subField]) => ({
+                    name: subName,
+                    type: subField.type || 'string',
+                    hint: subField.hint || '',
+                    extends_only: subField.extends_only || false,
+                })),
+            };
+        }
+        return {
+            name: name,
+            type: field.type || 'string',
+            hint: field.hint || '',
+            extends_only: field.extends_only || false,
+        };
+    });
+}
+
+/**
+ * Convert array-format tracked_field_additions to object format
+ * for the Agent init payload.
+ * Array: [{ name: "X", ... }, ...]
+ * Object: { "X": { ... } }
+ */
+function tfAdditionsArrayToObject(additions) {
+    if (!Array.isArray(additions)) return additions || null;
+    if (additions.length === 0) return null;
+
+    const obj = {};
+    for (const entry of additions) {
+        const name = entry.name || '';
+        if (!name) continue;
+
+        if (entry.fields !== undefined) {
+            // Group
+            const subFields = {};
+            for (const sub of (entry.fields || [])) {
+                const subName = sub.name || '';
+                if (!subName) continue;
+                subFields[subName] = {
+                    type: sub.type || 'string',
+                    hint: sub.hint || '',
+                    extends_only: sub.extends_only || false,
+                };
+            }
+            obj[name] = {
+                description: entry.description || '',
+                is_dynamic: entry.is_dynamic || false,
+                fields: subFields,
+            };
+        } else {
+            obj[name] = {
+                type: entry.type || 'string',
+                hint: entry.hint || '',
+                extends_only: entry.extends_only || false,
+            };
+        }
+    }
+    return Object.keys(obj).length > 0 ? obj : null;
+}
+
+// #############################################
 // # Character Data Access
 // #############################################
 
 /**
  * Read the stored character config from the active character's card data.
  * Returns a validated copy of the stored config, or the defaults.
+ * Migrates old object-format tracked_field_additions to array on read.
  */
 function readCharConfig() {
     const charId = panelCharId ?? state.context.characterId;
@@ -91,20 +177,29 @@ function readCharConfig() {
 
     if (char?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]) {
         const stored = char.data.extensions[CHAR_CONFIG_EXT_KEY];
+
+        // Migrate tracked_field_additions from object to array format
+        let tfAdditions = stored.tracked_field_additions;
+        if (tfAdditions && !Array.isArray(tfAdditions) && typeof tfAdditions === 'object') {
+            tfAdditions = migrateTFAdditionsToArray(tfAdditions);
+            // Write back migrated format so it only converts once
+            char.data.extensions[CHAR_CONFIG_EXT_KEY].tracked_field_additions = tfAdditions;
+        }
+
         return {
             mode: (stored.mode === 'scenario') ? 'scenario' : 'characters',
             names: Array.isArray(stored.names) && stored.names.length > 0 ? [...stored.names] : [''],
             prompt_settings: stored.prompt_settings || {},
-            tracked_field_additions: stored.tracked_field_additions || {},
+            tracked_field_additions: Array.isArray(tfAdditions) ? [...tfAdditions.map(e => JSON.parse(JSON.stringify(e)))] : [],
         };
     }
 
-    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings: {}, tracked_field_additions: {} };
+    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings: {}, tracked_field_additions: [] };
 }
 
 /**
  * Write the character config to the active character's card data
- * and trigger a debounced save.
+ * and persist to the character file.
  */
 function writeCharConfig(config) {
     const charId = panelCharId ?? state.context.characterId;
@@ -119,7 +214,7 @@ function writeCharConfig(config) {
         mode: config.mode || 'characters',
         names: config.names || [''],
         prompt_settings: config.prompt_settings || {},
-        tracked_field_additions: config.tracked_field_additions || {},
+        tracked_field_additions: Array.isArray(config.tracked_field_additions) ? config.tracked_field_additions : [],
     };
 
     // Write to in-memory object (keeps it available without reload)
@@ -127,8 +222,7 @@ function writeCharConfig(config) {
     if (!char.data.extensions) char.data.extensions = {};
     char.data.extensions[CHAR_CONFIG_EXT_KEY] = configData;
 
-    // Try writeExtensionField for ST's in-memory state
-    // (may not persist to file in group mode, so we always call the API too)
+    // Update ST's internal state (may not persist to file in group mode)
     if (typeof state.context.writeExtensionField === 'function') {
         try {
             state.context.writeExtensionField(charId, CHAR_CONFIG_EXT_KEY, configData);
@@ -137,36 +231,42 @@ function writeCharConfig(config) {
         }
     }
 
-    // ALWAYS persist to character card file via API
-    // writeExtensionField alone does not guarantee file save in group mode
-    fallbackMergeAttributes(char, configData);
-}
-
-function fallbackMergeAttributes(char, configData) {
+    // Persist to character card file via merge-attributes API.
+    // Two-step: null out first so removed/renamed keys are deleted,
+    // then write the fresh config.
     const avatar = char.avatar;
     if (!avatar) return;
+
+    const headers = state.context.getRequestHeaders ? state.context.getRequestHeaders() : {};
+
     fetch('/api/characters/merge-attributes', {
         method: 'POST',
-        headers: state.context.getRequestHeaders(),
+        headers,
         body: JSON.stringify({
-            avatar: avatar,
-            data: {
-                extensions: {
-                    [CHAR_CONFIG_EXT_KEY]: configData,
-                },
-            },
+            avatar,
+            data: { extensions: { [CHAR_CONFIG_EXT_KEY]: null } },
         }),
     })
-        .then(resp => {
-            if (resp.ok) {
-                console.log(`[${EXTENSION_NAME}] writeCharConfig: persisted via merge-attributes`);
-            } else {
-                console.warn(`[${EXTENSION_NAME}] merge-attributes returned ${resp.status}`);
-            }
-        })
-        .catch(err => {
-            console.warn(`[${EXTENSION_NAME}] merge-attributes failed:`, err);
+    .then(() => {
+        return fetch('/api/characters/merge-attributes', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                avatar,
+                data: { extensions: { [CHAR_CONFIG_EXT_KEY]: configData } },
+            }),
         });
+    })
+    .then(resp => {
+        if (resp.ok) {
+            console.log(`[${EXTENSION_NAME}] writeCharConfig: persisted to file`);
+        } else {
+            console.warn(`[${EXTENSION_NAME}] merge-attributes returned ${resp.status}`);
+        }
+    })
+    .catch(err => {
+        console.warn(`[${EXTENSION_NAME}] merge-attributes failed:`, err);
+    });
 }
 
 // #############################################
@@ -216,24 +316,30 @@ export function getPromptOverridesForChar(charObj) {
 
 /**
  * Get the per-character tracked field additions.
+ * Converts array storage to object format for the payload.
  * Returns null if no additions exist.
  */
 export function getCharTrackedFieldAdditions() {
     const config = readCharConfig();
-    const additions = config.tracked_field_additions;
-    if (!additions || typeof additions !== 'object' || Object.keys(additions).length === 0) return null;
-    return additions;
+    return tfAdditionsArrayToObject(config.tracked_field_additions);
 }
 
 /**
  * Get tracked field additions for a specific character object.
  * Works in group mode where getActiveCharData() returns null.
+ * Converts array storage to object format for the payload.
  */
 export function getTrackedFieldAdditionsForChar(charObj) {
     if (!charObj?.data?.extensions) return null;
     const extData = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
     if (!extData?.tracked_field_additions) return null;
-    return JSON.parse(JSON.stringify(extData.tracked_field_additions));
+
+    let additions = extData.tracked_field_additions;
+    // Migrate old object format on the fly
+    if (!Array.isArray(additions) && typeof additions === 'object') {
+        additions = migrateTFAdditionsToArray(additions);
+    }
+    return tfAdditionsArrayToObject(additions);
 }
 
 // #############################################
@@ -350,7 +456,7 @@ function injectBrainCSS() {
             font-size: 11px;
             opacity: 0.7;
         }
-        
+
         .ass-brain-section details summary {
             cursor: pointer;
             padding: 4px 0;
@@ -519,8 +625,6 @@ function openCharConfigPanel() {
     if ($('#ass-brain-overlay').length) return;
 
     // Capture which character is being viewed
-    // Works for both single-char (context.characterId) and group chat
-    // (matches avatar image filename against characters map)
     panelCharId = findCharIdByAvatar() || state.context.characterId || null;
 
     const config = readCharConfig();
@@ -641,7 +745,7 @@ function openCharConfigPanel() {
 
     // Bind prompt override events (toggle visibility for Language Custom input)
     bindCharPromptOverrideEvents();
-	
+
     // Bind tracked field addition events
     bindTFAdditionEvents();
 }
@@ -713,6 +817,7 @@ function renderNameInputs(names) {
 
 // #############################################
 // # Tracked Fields Additions (brain panel)
+// # Storage format: ARRAY of entries (v2)
 // #############################################
 
 function escapeAttr(str) {
@@ -727,34 +832,36 @@ function buildTypeOptions(selected) {
     ).join('');
 }
 
-function isTFGroup(field) {
-    return field && field.fields !== undefined;
+function isTFGroup(entry) {
+    return entry && entry.fields !== undefined;
 }
 
-function renderTFAdditions(additions) {
-    if (!additions || typeof additions !== 'object') return '';
+// --- Render ---
 
-    const entries = Object.entries(additions);
-    if (entries.length === 0) return '<small style="color:var(--fg_dim);">No additions defined.</small>';
+function renderTFAdditions(additions) {
+    if (!Array.isArray(additions) || additions.length === 0) {
+        return '<small style="color:var(--fg_dim);">No additions defined.</small>';
+    }
 
     let html = '';
-    for (const [key, field] of entries) {
-        html += isTFGroup(field)
-            ? renderTFAdditionGroup(key, field)
-            : renderTFAdditionSimple(key, field);
+    for (let i = 0; i < additions.length; i++) {
+        html += isTFGroup(additions[i])
+            ? renderTFAdditionGroup(additions[i], i)
+            : renderTFAdditionSimple(additions[i], i);
     }
     return html;
 }
 
-function renderTFAdditionSimple(key, field) {
+function renderTFAdditionSimple(field, index) {
+    const name = field.name || '';
     const type = field.type || 'string';
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
 
     return `
-    <div class="ass-btf-field" data-tf-key="${escapeAttr(key)}">
+    <div class="ass-btf-field" data-tf-index="${index}">
         <div class="ass-btf-row">
-            <input class="text_pole ass-btf-name" value="${escapeAttr(key)}"
+            <input class="text_pole ass-btf-name" value="${escapeAttr(name)}"
                    placeholder="Field name" style="flex:1; min-width:0;">
             <input class="text_pole ass-btf-hint" value="${escapeAttr(hint)}"
                    placeholder="Description / Hint" style="flex:3; min-width:0;">
@@ -775,20 +882,22 @@ function renderTFAdditionSimple(key, field) {
     </div>`;
 }
 
-function renderTFAdditionGroup(key, field) {
+function renderTFAdditionGroup(field, index) {
+    const name = field.name || '';
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
-    const fields = field.fields || {};
+    const fields = Array.isArray(field.fields) ? field.fields : [];
 
     let subfieldsHtml = '';
-    for (const [subKey, subField] of Object.entries(fields)) {
-        const type = subField.type || 'string';
-        const hint = subField.hint || '';
-        const extendsOnly = subField.extends_only || false;
+    for (let si = 0; si < fields.length; si++) {
+        const sub = fields[si];
+        const type = sub.type || 'string';
+        const hint = sub.hint || '';
+        const extendsOnly = sub.extends_only || false;
 
         subfieldsHtml += `
-        <div class="ass-btf-row ass-btf-subfield-row" data-tf-subkey="${escapeAttr(subKey)}">
-            <input class="text_pole ass-btf-sub-name" value="${escapeAttr(subKey)}"
+        <div class="ass-btf-row ass-btf-subfield-row" data-tf-subindex="${si}">
+            <input class="text_pole ass-btf-sub-name" value="${escapeAttr(sub.name || '')}"
                    placeholder="Sub-field name" style="flex:1; min-width:0;">
             <select class="text_pole ass-btf-sub-type" style="flex:0 0 130px;">
                 ${buildTypeOptions(type)}
@@ -805,9 +914,9 @@ function renderTFAdditionGroup(key, field) {
     }
 
     return `
-    <div class="ass-btf-field ass-btf-group" data-tf-key="${escapeAttr(key)}">
+    <div class="ass-btf-field ass-btf-group" data-tf-index="${index}">
         <div class="ass-btf-row">
-            <input class="text_pole ass-btf-name" value="${escapeAttr(key)}"
+            <input class="text_pole ass-btf-name" value="${escapeAttr(name)}"
                    placeholder="Group name" style="flex:1; min-width:0;">
             <input class="text_pole ass-btf-desc" value="${escapeAttr(description)}"
                    placeholder="Description" style="flex:3; min-width:0;">
@@ -823,15 +932,17 @@ function renderTFAdditionGroup(key, field) {
             ${subfieldsHtml}
         </div>
         <div style="margin:4px 0 4px 20px;">
-            <button class="menu_button ass-btf-add-subfield" data-tf-key="${escapeAttr(key)}">
+            <button class="menu_button ass-btf-add-subfield">
                 <i class="fa-solid fa-plus"></i> Add sub-field
             </button>
         </div>
     </div>`;
 }
 
+// --- Read from DOM ---
+
 function readTFAdditionsFromUI() {
-    const additions = {};
+    const additions = [];
     $('#ass-brain-tf-additions .ass-btf-field').each(function () {
         const $field = $(this);
         const name = ($field.find('> .ass-btf-row > .ass-btf-name').val() || '').trim();
@@ -839,83 +950,95 @@ function readTFAdditionsFromUI() {
 
         if ($field.hasClass('ass-btf-group')) {
             const group = {
+                name: name,
                 description: ($field.find('.ass-btf-desc').val() || '').trim(),
                 is_dynamic: $field.find('.ass-btf-dynamic').is(':checked'),
-                fields: {},
+                fields: [],
             };
             $field.find('.ass-btf-subfield-row').each(function () {
                 const subName = ($(this).find('.ass-btf-sub-name').val() || '').trim();
                 if (!subName) return;
-                group.fields[subName] = {
+                group.fields.push({
+                    name: subName,
                     type: $(this).find('.ass-btf-sub-type').val() || 'string',
                     hint: ($(this).find('.ass-btf-sub-hint').val() || '').trim(),
                     extends_only: $(this).find('.ass-btf-extends').is(':checked'),
-                };
+                });
             });
-            additions[name] = group;
+            additions.push(group);
         } else {
-            additions[name] = {
+            additions.push({
+                name: name,
                 type: $field.find('.ass-btf-type').val() || 'string',
                 hint: ($field.find('.ass-btf-hint').val() || '').trim(),
                 extends_only: $field.find('.ass-btf-extends').is(':checked'),
-            };
+            });
         }
     });
     return additions;
 }
 
+// --- Render helper ---
+
 function renderTFContainer(additions) {
     $('#ass-brain-tf-additions').html(renderTFAdditions(additions));
 }
 
+// --- Handlers ---
+
 function handleTFAddField() {
     const config = readCurrentConfig();
-    const name = 'new_field_' + Date.now();
-    config.tracked_field_additions[name] = {
+    config.tracked_field_additions.push({
+        name: 'new_field_' + Date.now(),
         type: 'string',
         hint: '',
         extends_only: false,
-    };
+    });
     renderTFContainer(config.tracked_field_additions);
 }
 
 function handleTFRemoveField(button) {
     const config = readCurrentConfig();
-    const oldKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
-    delete config.tracked_field_additions[oldKey];
+    const index = parseInt($(button).closest('.ass-btf-field').attr('data-tf-index'));
+    if (!isNaN(index) && index >= 0 && index < config.tracked_field_additions.length) {
+        config.tracked_field_additions.splice(index, 1);
+    }
     renderTFContainer(config.tracked_field_additions);
 }
 
 function handleTFConvertToGroup(button) {
     const config = readCurrentConfig();
-    const oldKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
-    const field = config.tracked_field_additions[oldKey];
+    const index = parseInt($(button).closest('.ass-btf-field').attr('data-tf-index'));
+    const field = config.tracked_field_additions[index];
     if (!field || isTFGroup(field)) return;
 
-    const subName = 'sub_1';
-    config.tracked_field_additions[oldKey] = {
+    config.tracked_field_additions[index] = {
+        name: field.name,
         description: field.hint || '',
         is_dynamic: false,
-        fields: {
-            [subName]: {
-                type: field.type || 'string',
-                hint: '',
-                extends_only: false,
-            },
-        },
+        fields: [{
+            name: 'sub_1',
+            type: field.type || 'string',
+            hint: '',
+            extends_only: false,
+        }],
     };
     renderTFContainer(config.tracked_field_additions);
 }
 
 function handleTFAddSubField(button) {
     const config = readCurrentConfig();
-    const groupKey = String($(button).closest('.ass-btf-field').attr('data-tf-key'));
-    const group = config.tracked_field_additions[groupKey];
-    if (!group) return;
+    const index = parseInt($(button).closest('.ass-btf-field').attr('data-tf-index'));
+    const group = config.tracked_field_additions[index];
+    if (!group || !isTFGroup(group)) return;
 
-    if (!group.fields) group.fields = {};
-    const subName = 'new_sub_' + Date.now();
-    group.fields[subName] = { type: 'string', hint: '', extends_only: false };
+    if (!group.fields) group.fields = [];
+    group.fields.push({
+        name: 'new_sub_' + Date.now(),
+        type: 'string',
+        hint: '',
+        extends_only: false,
+    });
 
     renderTFContainer(config.tracked_field_additions);
 }
@@ -923,16 +1046,17 @@ function handleTFAddSubField(button) {
 function handleTFRemoveSubField(button) {
     const config = readCurrentConfig();
     const $group = $(button).closest('.ass-btf-field');
-    const groupKey = String($group.attr('data-tf-key'));
-    const subKey = String($(button).closest('.ass-btf-subfield-row').attr('data-tf-subkey'));
-    const group = config.tracked_field_additions[groupKey];
+    const groupIndex = parseInt($group.attr('data-tf-index'));
+    const subIndex = parseInt($(button).closest('.ass-btf-subfield-row').attr('data-tf-subindex'));
+    const group = config.tracked_field_additions[groupIndex];
     if (!group?.fields) return;
 
-    delete group.fields[subKey];
+    group.fields.splice(subIndex, 1);
 
     // If no sub-fields left, convert back to simple
-    if (Object.keys(group.fields).length === 0) {
-        config.tracked_field_additions[groupKey] = {
+    if (group.fields.length === 0) {
+        config.tracked_field_additions[groupIndex] = {
+            name: group.name,
             type: 'string',
             hint: group.description || '',
             extends_only: false,
