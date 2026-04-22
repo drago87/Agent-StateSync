@@ -2,7 +2,7 @@
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
-// File Version: 1.0.2
+// File Version: 1.0.3
 
 import state from './state.js';
 import {
@@ -384,7 +384,7 @@ function buildGroupMemberPayload(charObj, firstMes) {
 	// Add per-character prompt overrides (if any)
     const charPromptOverrides = getPromptOverridesForChar(charObj);
     if (charPromptOverrides) {
-        member.prompt_overrides = charPromptOverrides;
+        member.prompt_settings_override = charPromptOverrides;
     }
 
     return member;

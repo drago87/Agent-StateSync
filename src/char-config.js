@@ -14,7 +14,7 @@
 //   [{ name: "FieldName", type, hint, extends_only }, ...]
 //   Arrays replace entirely on merge — no ghost fields after F5.
 //
-// File Version: 1.5.0
+// File Version: 1.5.1
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -34,7 +34,7 @@ import {
 const DEFAULT_CHAR_CONFIG = {
     mode: 'characters',   // 'characters' | 'scenario'
     names: [''],          // array of character name strings
-    prompt_settings: {},  // per-character prompt overrides
+    prompt_settings_override: {},  // per-character prompt overrides
     tracked_field_additions: [],  // ARRAY of field entries (v2 format)
 };
 
@@ -191,14 +191,14 @@ function readCharConfig() {
         return {
             mode: (stored.mode === 'scenario') ? 'scenario' : 'characters',
             names: Array.isArray(stored.names) && stored.names.length > 0 ? [...stored.names] : [''],
-            prompt_settings: stored.prompt_settings || {},
+            prompt_settings_override: stored.prompt_settings_override || stored.prompt_settings || {},
             tracked_field_additions: Array.isArray(tfAdditions)
                 ? [...tfAdditions.map(e => JSON.parse(JSON.stringify(e)))]
                 : [],
         };
     }
 
-    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings: {}, tracked_field_additions: [] };
+    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings_override: {}, tracked_field_additions: [] };
 }
 
 /**
@@ -222,7 +222,7 @@ function writeCharConfig(config) {
     const configData = {
         mode: config.mode || 'characters',
         names: config.names || [''],
-        prompt_settings: config.prompt_settings || {},
+        prompt_settings_override: config.prompt_settings_override || {},
         tracked_field_additions: Array.isArray(config.tracked_field_additions)
             ? config.tracked_field_additions
             : [],
@@ -299,7 +299,7 @@ export function getCharInitNames() {
  */
 export function getCharPromptOverrides() {
     const config = readCharConfig();
-    const overrides = config.prompt_settings;
+    const overrides = config.prompt_settings_override;
     if (!overrides || typeof overrides !== 'object' || Object.keys(overrides).length === 0) return null;
     return overrides;
 }
@@ -311,8 +311,9 @@ export function getCharPromptOverrides() {
 export function getPromptOverridesForChar(charObj) {
     if (!charObj?.data?.extensions) return null;
     const extData = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
-    if (!extData?.prompt_overrides) return null;
-    return JSON.parse(JSON.stringify(extData.prompt_overrides));
+    const overrides = extData?.prompt_settings_override || extData?.prompt_settings;
+    if (!overrides || typeof overrides !== 'object' || Object.keys(overrides).length === 0) return null;
+    return JSON.parse(JSON.stringify(overrides));
 }
 
 /**
@@ -778,7 +779,7 @@ function readCurrentConfig() {
     return {
         mode,
         names,
-        prompt_settings: readCharPromptOverridesFromUI(),
+        prompt_settings_override: readCharPromptOverridesFromUI(),
         tracked_field_additions: readTFAdditionsFromUI(),
     };
 }
