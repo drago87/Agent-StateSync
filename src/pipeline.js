@@ -3,11 +3,11 @@
 // The main interception pipeline: message type detection, history trimming,
 // [SYSTEM_META] tag construction, dummy bypass responses, and the
 // fetch interceptor that ties everything together.
-// File Version: 1.0.0
+// File Version: 1.1.0
 
 import state from './state.js';
 import {
-    EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER,
+    EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
     getSettings, isBypassMode, syncConfigToAgent, updateStatus,
 } from './settings.js';
 import { resolveBackendOrigin, getAgentOrigin } from './agent-url.js';
@@ -332,7 +332,22 @@ export function interceptFetch() {
                 return createDummyResponse();
             }
 
-            return originalFetch.call(window, targetUrl, newOptions);
+            const response = await originalFetch.call(window, targetUrl, newOptions);
+
+            // Scan response for push notifications from the Agent (non-blocking).
+            // Tees the stream: one copy goes to ST, one is scanned in background.
+            if (response.body) {
+                const [streamForST, streamForScan] = response.body.tee();
+                scanForPushNotifications(streamForScan);
+
+                return new Response(streamForST, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers,
+                });
+            }
+
+            return response;
 
         } catch (err) {
             console.error(`[${EXTENSION_NAME}] Interception error:`, err);
@@ -349,4 +364,114 @@ export function interceptFetch() {
             return originalFetch.call(window, url, options);
         }
     };
+}
+
+// #############################################
+// # Push Notification Detection
+// #############################################
+
+const PUSH_NOTIFICATION_REGEX = /state\.push_notification\s*\(\s*["'](\w+)["']\s*,\s*([\s\S]*?)\s*\)/g;
+
+/**
+ * Read a teed stream copy and scan for push_notification() calls.
+ * Non-blocking — runs in the background, doesn't block ST's stream.
+ */
+async function scanForPushNotifications(stream) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            fullText += decoder.decode(value, { stream: true });
+        }
+    } catch (e) {
+        // Stream cancelled (e.g. user swiped) — that's fine
+    }
+
+    fullText += decoder.decode(); // flush remaining bytes
+
+    // Find all push_notification() calls in the full response text
+    const regex = new RegExp(PUSH_NOTIFICATION_REGEX.source, 'g');
+    let match;
+    while ((match = regex.exec(fullText)) !== null) {
+        handlePushNotification(match[1], match[2]);
+    }
+}
+
+/**
+ * Extract JSON payload from the raw text between the outer { and }.
+ * Handles nested braces correctly by using lastIndexOf.
+ */
+function extractJsonPayload(raw) {
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) return null;
+    return raw.substring(start, end + 1);
+}
+
+/**
+ * Route a push notification to the appropriate handler.
+ * Extensible — add new cases for future notification types.
+ */
+function handlePushNotification(type, rawPayload) {
+    try {
+        const jsonStr = extractJsonPayload(rawPayload);
+        if (!jsonStr) {
+            console.warn(`[${EXTENSION_NAME}] Push notification "${type}": no JSON payload found`);
+            return;
+        }
+        const payload = JSON.parse(jsonStr);
+        console.log(`[${EXTENSION_NAME}] Push notification: ${type}`, payload);
+
+        switch (type) {
+            case 'session_deleted':
+                handleSessionDeleted(payload);
+                break;
+            // Future types: case 'state_updated': ...
+            default:
+                console.warn(`[${EXTENSION_NAME}] Unknown push notification type: ${type}`);
+        }
+    } catch (e) {
+        console.warn(`[${EXTENSION_NAME}] Failed to parse push notification "${type}":`, e);
+    }
+}
+
+/**
+ * Handle a session_deleted notification from the Agent.
+ * Clears session metadata, shows Init button, updates status.
+ */
+async function handleSessionDeleted(payload) {
+    if (!state.context.chatMetadata) return;
+
+    // Verify this is our current session (ignore stale notifications)
+    const currentSessionId = state.context.chatMetadata[META_KEY_SESSION];
+    if (currentSessionId && payload.session_id !== currentSessionId) {
+        console.log(`[${EXTENSION_NAME}] session_deleted for different session (${payload.session_id} vs ours ${currentSessionId}), ignoring`);
+        return;
+    }
+
+    // Clear session metadata
+    delete state.context.chatMetadata[META_KEY_SESSION];
+    delete state.context.chatMetadata[META_KEY_INITIALIZED];
+    state.context.chatMetadata[META_KEY_COUNTER] = 0;
+    await state.context.saveMetadata();
+
+    // Update runtime state
+    state.sessionInitialized = false;
+    state.configSynced = false;
+
+    // Update UI
+    updateStatus('Session deleted', '#f0ad4e');
+
+    console.log(`[${EXTENSION_NAME}] Session ${payload.session_id} deleted by Agent — Init button now visible`);
+
+    if (typeof toastr !== 'undefined') {
+        toastr.info(
+            `Session deleted by Agent${payload.character_name ? ' (' + payload.character_name + ')' : ''}`,
+            'Agent-StateSync'
+        );
+    }
 }
