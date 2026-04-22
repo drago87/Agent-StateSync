@@ -675,7 +675,7 @@ function openCharConfigPanel() {
                         <i class="fa-solid fa-sliders"></i> Prompt Configs Override
                     </summary>
                     <div id="ass-brain-prompt-overrides">
-                        ${renderCharPromptOverrides(config.prompt_settings)}
+                        ${renderCharPromptOverrides(config.prompt_settings_override)}
                     </div>
                     <div class="ass-brain-info">
                         Override global prompt settings for this character only.<br>
