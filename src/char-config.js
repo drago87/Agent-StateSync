@@ -127,21 +127,19 @@ function writeCharConfig(config) {
     if (!char.data.extensions) char.data.extensions = {};
     char.data.extensions[CHAR_CONFIG_EXT_KEY] = configData;
 
-    // Persist to character card file
+    // Try writeExtensionField for ST's in-memory state
+    // (may not persist to file in group mode, so we always call the API too)
     if (typeof state.context.writeExtensionField === 'function') {
-        state.context.writeExtensionField(charId, CHAR_CONFIG_EXT_KEY, configData)
-            .then(() => {
-                console.log(`[${EXTENSION_NAME}] writeCharConfig: persisted via writeExtensionField`);
-            })
-            .catch(err => {
-                console.warn(`[${EXTENSION_NAME}] writeExtensionField failed:`, err);
-                // Fallback: try merge-attributes API
-                fallbackMergeAttributes(char, configData);
-            });
-    } else {
-        console.warn(`[${EXTENSION_NAME}] writeExtensionField not available, trying merge-attributes`);
-        fallbackMergeAttributes(char, configData);
+        try {
+            state.context.writeExtensionField(charId, CHAR_CONFIG_EXT_KEY, configData);
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] writeExtensionField error:`, e);
+        }
     }
+
+    // ALWAYS persist to character card file via API
+    // writeExtensionField alone does not guarantee file save in group mode
+    fallbackMergeAttributes(char, configData);
 }
 
 function fallbackMergeAttributes(char, configData) {
