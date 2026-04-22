@@ -2,7 +2,7 @@
 //
 // Settings panel HTML/CSS, event bindings, character config button,
 // chat-changed event hook, and the main initialization IIFE.
-// File Version: 1.0.2
+// File Version: 1.0.3
 
 import state from './state.js';
 import {
@@ -650,6 +650,8 @@ export function updateInitButtonVisibility() {
 // #############################################
 
 export function hookChatEvents() {
+	// Listen for session deletion notifications from the polling system
+    $(window).on('ass-session-deleted', updateInitButtonVisibility);
     const eventBus = state.context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {

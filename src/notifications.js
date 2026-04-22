@@ -8,7 +8,7 @@
 //   POST /api/ping  →  { status, notifications: [...] }
 //   POST /api/notifications/ack  →  acknowledges each processed notification
 //
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -180,6 +180,9 @@ async function handleSessionDeleted(data) {
 
     // Update UI
     updateStatus('Session deleted', '#f0ad4e');
+
+    // Notify UI to show Init button (avoids circular dep with ui.js)
+    window.dispatchEvent(new CustomEvent('ass-session-deleted'));
 
     console.log(`[${EXTENSION_NAME}] Session ${data.session_id} deleted by Agent — Init button now visible`);
 
