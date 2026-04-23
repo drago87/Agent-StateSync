@@ -8,7 +8,7 @@
 // Stored in extensionSettings, keyed by persona avatar filename.
 // Each persona gets its own independent overrides.
 //
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';
@@ -313,7 +313,7 @@ function openPersonaConfigPanel() {
                 <div class="ass-brain-section-title">
                     <i class="fa-solid fa-sliders"></i> Prompt Configs Override
                 </div>
-                <div id="ass-persona-prompt-overrides">
+                <div id="ass-brain-prompt-overrides">
                     ${renderCharPromptOverrides(config.prompt_settings_override)}
                 </div>
                 <div class="ass-brain-info">
@@ -327,11 +327,11 @@ function openPersonaConfigPanel() {
                 <div class="ass-brain-section-title">
                     <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
                 </div>
-                <div id="ass-persona-tf-additions">
+                <div id="ass-brain-tf-additions">
                     ${renderTFAdditions(config.tracked_field_additions)}
                 </div>
                 <div style="margin-top:6px;">
-                    <button id="ass-persona-add-tf" class="menu_button" type="button">
+                    <button id="ass-brain-add-tf" class="menu_button" type="button">
                         <i class="fa-solid fa-plus"></i> Add Field
                     </button>
                 </div>
@@ -363,24 +363,10 @@ function openPersonaConfigPanel() {
         if (e.key === 'Escape') closePersonaConfigPanel();
     });
 
-    // Add field button
-    $('#ass-persona-add-tf').on('click', function () {
-        const config = readCurrentPersonaConfig();
-        config.tracked_field_additions.push({
-            name: '',
-            type: 'string',
-            hint: '',
-            extends_only: false,
-        });
-        // Re-render TF additions
-        $('#ass-persona-tf-additions').html(renderTFAdditions(config.tracked_field_additions));
-        bindTFAdditionEvents();
-    });
-
     // Bind prompt override events
     bindCharPromptOverrideEvents();
 
-    // Bind tracked field addition events
+    // Bind tracked field addition events (handles Add Field, Add Sub-field, etc.)
     bindTFAdditionEvents();
 }
 
@@ -396,7 +382,7 @@ function closePersonaConfigPanel() {
 function readCurrentPersonaConfig() {
     return {
         prompt_settings_override: readCharPromptOverridesFromUI(),
-        tracked_field_additions: readTFAdditionsFromUI('#ass-persona-tf-additions'),
+        tracked_field_additions: readTFAdditionsFromUI(),
     };
 }
 
