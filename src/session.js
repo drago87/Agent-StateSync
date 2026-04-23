@@ -9,16 +9,17 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import state from './state.js';
 import {
     EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
     CHAR_CONFIG_EXT_KEY,
-    getSettings, isBypassMode, syncConfigToAgent, updateStatus,
+    getSettings, isBypassMode, syncConfigToAgent, updateStatus, buildPromptSettingsPayload,
 } from './settings.js';
 import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
+import defaultConfig from './default-config.js';
 import { getCharInitType, getCharInitNames } from './char-config.js';
 import { startNotificationPolling, stopNotificationPolling } from './notifications.js';
 
@@ -520,6 +521,25 @@ function buildGroupMemberPayload(charObj, firstMes) {
         member.character = cardData;
     }
 
+    // --- Per-character tracked_field_additions and prompt_settings_override ---
+    const extData = charObj?.data?.extensions?.[CHAR_CONFIG_EXT_KEY];
+    if (extData) {
+        if (Array.isArray(extData.tracked_field_additions) && extData.tracked_field_additions.length > 0) {
+            member.tracked_field_additions = extData.tracked_field_additions;
+        }
+        if (extData.prompt_settings_override && typeof extData.prompt_settings_override === 'object') {
+            const overrides = { ...extData.prompt_settings_override };
+            for (const [key, val] of Object.entries(overrides)) {
+                if (val === undefined || val === null || val === '' || val === 'global_default') {
+                    delete overrides[key];
+                }
+            }
+            if (Object.keys(overrides).length > 0) {
+                member.prompt_settings_override = overrides;
+            }
+        }
+    }
+
     return member;
 }
 
@@ -577,6 +597,19 @@ function buildSingleCharInitPayload() {
     if (persona) {
         payload.persona = persona;
     }
+
+    // Global tracked_fields definition
+    if (defaultConfig?.tracked_fields) {
+        payload.tracked_fields = JSON.parse(JSON.stringify(defaultConfig.tracked_fields));
+    }
+
+    // Global prompt_settings (merged with per-character overrides)
+    const charConfig = state.context.characters?.[state.context.characterFilter]
+        ?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]
+        || state.context.chatMetadata?.[CHAR_CONFIG_EXT_KEY]
+        || null;
+    const charOverrides = charConfig?.prompt_settings_override || null;
+    payload.prompt_settings = buildPromptSettingsPayload(charOverrides);
 
     console.log(`[${EXTENSION_NAME}] Single-char init: type=${cardType}, name="${cardName}"`);
 
@@ -653,6 +686,14 @@ function buildGroupInitPayload() {
     if (persona) {
         payload.persona = persona;
     }
+
+    // Global tracked_fields definition
+    if (defaultConfig?.tracked_fields) {
+        payload.tracked_fields = JSON.parse(JSON.stringify(defaultConfig.tracked_fields));
+    }
+
+    // Global prompt_settings
+    payload.prompt_settings = buildPromptSettingsPayload(null);
 
     console.log(`[${EXTENSION_NAME}] Group init: "${state.activeGroup.name}" with ${memberPayloads.length} members`);
     console.log(`[${EXTENSION_NAME}] group_scenario: ${groupScenario ? 'yes' : 'no'}`);
