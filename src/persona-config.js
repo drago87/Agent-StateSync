@@ -297,7 +297,7 @@ function openPersonaConfigPanel() {
 
     const html = `
     <div id="ass-persona-overlay" class="ass-persona-overlay">
-        <div class="ass-persona-panel">
+        <div id="ass-persona-panel" class="ass-persona-panel">
 
             <div class="ass-brain-header">
                 <h3><i class="fa-solid fa-brain"></i> Agent Persona Config</h3>
