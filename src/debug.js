@@ -2,7 +2,7 @@
 //
 // Executes diagnostic commands and returns formatted output strings
 // for display in the debug panel textbox.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -277,6 +277,57 @@ export async function executeDebugCommand(command) {
                 add('');
                 add('--- Full SYSTEM_META tag ---');
                 add(state.lastInterceptLog.metaTag);
+                break;
+            }
+			
+			            case 'persona': {
+                add('=== Persona / User Description Search ===');
+                add('');
+
+                // 1. Check context.name1
+                add(`--- context.name1: "${state.context.name1 || '(empty)'}"`);
+                add('');
+
+                // 2. Check powerUserSettings — the correct source
+                const pu = state.context.powerUserSettings;
+                if (pu) {
+                    add(`--- powerUserSettings.persona_description ---`);
+                    add(`  "${(pu.persona_description || '(empty)').substring(0, 300)}"`);
+                    add('');
+
+                    add(`--- powerUserSettings.persona_descriptions ---`);
+                    const descs = pu.persona_descriptions;
+                    if (descs && typeof descs === 'object') {
+                        const keys = Object.keys(descs);
+                        add(`  ${keys.length} persona(s) with descriptions`);
+                        keys.forEach(avatar => {
+                            const d = descs[avatar];
+                            add(`  "${avatar}":`);
+                            add(`    name: "${(pu.personas?.[avatar] || '(unknown)').substring(0, 100)}"`);
+                            add(`    description: "${(d?.description || '(empty)').substring(0, 200)}"`);
+                            add(`    title: "${(d?.title || '(empty)').substring(0, 100)}"`);
+                        });
+                    } else {
+                        add('  (not an object)');
+                    }
+                    add('');
+
+                    // 3. Check persona name mapping
+                    add(`--- powerUserSettings.personas (avatar -> name) ---`);
+                    const personas = pu.personas;
+                    if (personas) {
+                        const personaEntries = Object.entries(personas);
+                        add(`  ${personaEntries.length} persona(s) defined`);
+                        personaEntries.forEach(([avatar, name]) => {
+                            add(`  "${avatar}" -> "${name}"`);
+                        });
+                    }
+                    add('');
+                } else {
+                    add('--- powerUserSettings: not found ---');
+                    add('');
+                }
+
                 break;
             }
 
