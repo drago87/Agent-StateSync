@@ -9,7 +9,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.0.2
+// File Version: 1.1.0
 
 import state from './state.js';
 import {
@@ -488,8 +488,10 @@ function readMemberCharConfig(charObj) {
         return { type: 'multi-character', names };
     }
 
-    return { type: 'character', names: [] };
+    // Single character — still return names so caller can add character_names
+    return { type: 'character', names };
 }
+
 
 /**
  * Build a single group member entry for the init payload.
@@ -519,6 +521,11 @@ function buildGroupMemberPayload(charObj, firstMes) {
     } else {
         // Plain character
         member.character = cardData;
+    }
+
+    // Single name override: card name differs from actual character name
+    if (config.type === 'character' && config.names.length === 1) {
+        member.character_names = config.names[0];
     }
 
     // --- Per-character tracked_field_additions and prompt_settings_override ---
@@ -584,6 +591,10 @@ function buildSingleCharInitPayload() {
     // For multi-character, include character_names
     if (cardType === 'multi-character' && cardNames.length > 0) {
         payload.character_names = cardNames.join(', ');
+    }
+    // Single name override: card name differs from actual character name
+    else if (cardType === 'character' && cardNames.length === 1) {
+        payload.character_names = cardNames[0];
     }
 
     // Card data goes under "character" or "scenario" key depending on type
