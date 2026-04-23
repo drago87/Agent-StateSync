@@ -280,7 +280,7 @@ export async function executeDebugCommand(command) {
                 break;
             }
 			
-			            case 'persona': {
+			case 'persona': {
                 add('=== Persona / User Description Search ===');
                 add('');
 
