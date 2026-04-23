@@ -9,7 +9,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.2.0
+// File Version: 1.2.1
 
 import state from './state.js';
 import {
@@ -377,6 +377,51 @@ export async function ensureSession(backendOrigin) {
     } catch (err) {
         console.error(`[${EXTENSION_NAME}] Fallback session creation failed:`, err);
         throw err;
+    }
+}
+
+/**
+ * Manual init — called when user clicks the Init button (rocket).
+ * Creates a session if needed, initializes it, and starts polling.
+ * @returns {boolean} true if successful
+ */
+export async function manualInitSession() {
+    const origin = getAgentOrigin();
+    if (!origin) {
+        toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
+        return false;
+    }
+
+    try {
+        const sessionId = await ensureSession(origin);
+
+        if (!sessionId) {
+            toastr.error('Failed to create session.', 'Agent-StateSync');
+            return false;
+        }
+
+        // Initialize with current character/group data
+        await initSession(origin, sessionId);
+
+        // Sync config
+        state.configSynced = false;
+        await syncConfigToAgent(getSettings(), origin);
+
+        // Start notification polling
+        startNotificationPolling();
+
+        state.sessionInitialized = true;
+        updateInitButtonVisibility();
+
+        const shortId = sessionId.substring(0, 8);
+        toastr.success(`Session initialized: ${shortId}...`, 'Agent-StateSync');
+        updateStatus(`Session ${shortId}...`, '#5cb85c');
+        return true;
+    } catch (err) {
+        console.error(`[${EXTENSION_NAME}] Manual init failed:`, err);
+        toastr.error(`Init failed: ${err.message}`, 'Agent-StateSync');
+        updateStatus('Init failed', '#d9534f');
+        return false;
     }
 }
 
