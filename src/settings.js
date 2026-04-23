@@ -121,6 +121,7 @@ export const DEBUG_COMMANDS = [
     { value: 'init_payload', label: 'Preview Init Payload' },
     { value: 'session_lookup', label: 'Session Metadata' },
     { value: 'last_intercept', label: 'Last Intercepted Request' },
+	{ value: 'persona', label: 'Persona Search' },
 ];
 
 // #############################################
