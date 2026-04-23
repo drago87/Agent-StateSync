@@ -9,7 +9,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.1.0
+// File Version: 1.2.0
 
 import state from './state.js';
 import {
@@ -21,6 +21,7 @@ import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
 import defaultConfig from './default-config.js';
 import { getCharInitType, getCharInitNames } from './char-config.js';
+import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions } from './persona-config.js';
 import { startNotificationPolling, stopNotificationPolling } from './notifications.js';
 
 // #############################################
@@ -425,6 +426,18 @@ function buildPersona() {
     const desc = state.context.powerUserSettings?.persona_description || '';
     if (desc) persona.description = desc;
 
+    // Per-persona tracked field additions
+    const personaTFAdditions = getPersonaTrackedFieldAdditions();
+    if (personaTFAdditions) {
+        persona.tracked_field_additions = personaTFAdditions;
+    }
+
+    // Per-persona prompt settings override
+    const personaPSOverride = getPersonaPromptOverrides();
+    if (personaPSOverride) {
+        persona.prompt_settings_override = personaPSOverride;
+    }
+
     return Object.keys(persona).length > 0 ? persona : undefined;
 }
 
@@ -613,13 +626,30 @@ function buildSingleCharInitPayload() {
         payload.tracked_fields = JSON.parse(JSON.stringify(defaultConfig.tracked_fields));
     }
 
-    // Global prompt_settings (merged with per-character overrides)
+    // Global prompt_settings (merged with per-character + persona overrides)
     const charConfig = state.context.characters?.[state.context.characterFilter]
         ?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]
         || state.context.chatMetadata?.[CHAR_CONFIG_EXT_KEY]
         || null;
     const charOverrides = charConfig?.prompt_settings_override || null;
-    payload.prompt_settings = buildPromptSettingsPayload(charOverrides);
+    let promptSettings = buildPromptSettingsPayload(charOverrides);
+
+    // Apply persona overrides on top (highest priority)
+    const personaOverrides = getPersonaPromptOverrides();
+    if (personaOverrides) {
+        const overridableKeys = [
+            'perspective', 'tense', 'tone', 'content_rating',
+            'extraction_strictness', 'detail_level', 'language', 'relationship_depth',
+        ];
+        for (const key of overridableKeys) {
+            if (personaOverrides[key] !== undefined && personaOverrides[key] !== null
+                && personaOverrides[key] !== '' && personaOverrides[key] !== 'global_default') {
+                promptSettings[key] = personaOverrides[key];
+            }
+        }
+    }
+
+    payload.prompt_settings = promptSettings;
 
     console.log(`[${EXTENSION_NAME}] Single-char init: type=${cardType}, name="${cardName}"`);
 
@@ -702,8 +732,25 @@ function buildGroupInitPayload() {
         payload.tracked_fields = JSON.parse(JSON.stringify(defaultConfig.tracked_fields));
     }
 
-    // Global prompt_settings
-    payload.prompt_settings = buildPromptSettingsPayload(null);
+    // Global prompt_settings (merged with persona overrides)
+    let promptSettings = buildPromptSettingsPayload(null);
+
+    // Apply persona overrides on top (highest priority)
+    const personaOverrides = getPersonaPromptOverrides();
+    if (personaOverrides) {
+        const overridableKeys = [
+            'perspective', 'tense', 'tone', 'content_rating',
+            'extraction_strictness', 'detail_level', 'language', 'relationship_depth',
+        ];
+        for (const key of overridableKeys) {
+            if (personaOverrides[key] !== undefined && personaOverrides[key] !== null
+                && personaOverrides[key] !== '' && personaOverrides[key] !== 'global_default') {
+                promptSettings[key] = personaOverrides[key];
+            }
+        }
+    }
+
+    payload.prompt_settings = promptSettings;
 
     console.log(`[${EXTENSION_NAME}] Group init: "${state.activeGroup.name}" with ${memberPayloads.length} members`);
     console.log(`[${EXTENSION_NAME}] group_scenario: ${groupScenario ? 'yes' : 'no'}`);

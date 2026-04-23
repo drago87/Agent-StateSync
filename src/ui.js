@@ -2,7 +2,7 @@
 //
 // Settings panel HTML/CSS, event bindings, character config button,
 // chat-changed event hook, and the main initialization IIFE.
-// File Version: 1.0.3
+// File Version: 1.1.0
 
 import state from './state.js';
 import {
@@ -19,6 +19,7 @@ import { proactiveChatChanged, manualInitSession } from './session.js';
 import { interceptFetch } from './pipeline.js';
 import { executeDebugCommand } from './debug.js';
 import { initCharConfig } from './char-config.js';
+import { initPersonaConfig } from './persona-config.js';
 import { initTrackedFieldsUI } from './tracked-fields.js';
 import { initPromptSettingsUI } from './prompt-settings.js';
 
@@ -732,6 +733,9 @@ export function init(debug = false) {
 
         // Inject brain button into Character Sheet Bar
         initCharConfig();
+
+        // Inject brain button into Persona controls
+        initPersonaConfig();
 
         console.log(`[${EXTENSION_NAME}] Extension loaded. Version 3.0`);
         console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
