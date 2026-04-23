@@ -9,6 +9,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -19,6 +20,7 @@ import {
 import { getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
 import { getCharInitType, getCharInitNames } from './char-config.js';
+import { startNotificationPolling, stopNotificationPolling } from './notifications.js';
 
 // #############################################
 // # 14. Proactive Chat-Changed Hook
@@ -206,6 +208,7 @@ async function attachToExistingSession(origin, sessionId) {
             : `"${state.context.name2 || 'Unknown'}"`;
         toastr.success(`Resumed session (${shortId}...) for ${chatLabel}`, 'Agent-StateSync');
         updateStatus(`Session ${shortId}...`, '#5cb85c');
+		startNotificationPolling();
     } catch (err) {
         console.error(`[${EXTENSION_NAME}] Session attach failed:`, err);
         toastr.error(`Session attach failed: ${err.message}`, 'Agent-StateSync');
@@ -297,6 +300,7 @@ async function createAndInitSession(origin, chatId) {
         const shortId = sessionId.substring(0, 8);
         toastr.success(`Session created: ${shortId}...`, 'Agent-StateSync');
         updateStatus(`Session ${shortId}...`, '#5cb85c');
+		startNotificationPolling();
     } catch (err) {
         console.error(`[${EXTENSION_NAME}] Proactive session creation failed:`, err);
         toastr.error(`Session creation failed: ${err.message}`, 'Agent-StateSync');
