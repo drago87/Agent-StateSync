@@ -1,5 +1,5 @@
 // prompt-settings.js — Agent-StateSync Prompt Settings Editor
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import state from './state.js';
 import {
@@ -299,19 +299,20 @@ export function renderCharPromptOverrides(saved) {
     return rows;
 }
 
-export function readCharPromptOverridesFromUI() {
+export function readCharPromptOverridesFromUI(panelSelector) {
     const overrides = {};
 
-    $('#ass-brain-panel .ass-ps-char-override-type').each(function () {
+    const $panel = panelSelector ? $(panelSelector) : $('#ass-brain-panel');
+    $panel.find('.ass-ps-char-override-type').each(function () {
         const key = $(this).data('key');
         const type = $(this).val();
         if (type === 'custom') {
-            const textVal = $(`#ass-brain-panel .ass-ps-char-override-text[data-key="${key}"]`).val().trim();
+            const textVal = $panel.find(`.ass-ps-char-override-text[data-key="${key}"]`).val().trim();
             if (textVal) overrides[key] = textVal;
         }
     });
 
-    $('#ass-brain-panel .ass-ps-char-override').each(function () {
+    $panel.find('.ass-ps-char-override').each(function () {
         const key = $(this).data('key');
         const val = $(this).val();
         if (val !== 'global_default') {
@@ -322,11 +323,13 @@ export function readCharPromptOverridesFromUI() {
     return overrides;
 }
 
-export function bindCharPromptOverrideEvents() {
+export function bindCharPromptOverrideEvents(panelSelector) {
+    const panelId = panelSelector || '#ass-brain-panel';
     $(document).on('change.ass-ps-override', '.ass-ps-char-override-type', function () {
         const key = $(this).data('key');
         const isCustom = $(this).val() === 'custom';
-        const $input = $(`#ass-brain-panel .ass-ps-char-override-text[data-key="${key}"]`);
+        const $panel = $(this).closest(panelId);
+        const $input = $panel.find(`.ass-ps-char-override-text[data-key="${key}"]`);
         if (isCustom) {
             $input.show().css('flex', '1').css('min-width', '0');
         } else {

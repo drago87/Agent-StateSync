@@ -8,7 +8,7 @@
 // Stored in extensionSettings, keyed by persona avatar filename.
 // Each persona gets its own independent overrides.
 //
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';
@@ -364,7 +364,7 @@ function openPersonaConfigPanel() {
     });
 
     // Bind prompt override events
-    bindCharPromptOverrideEvents();
+    bindCharPromptOverrideEvents('#ass-persona-panel');
 
     // Bind tracked field addition events (handles Add Field, Add Sub-field, etc.)
     bindTFAdditionEvents();
@@ -381,7 +381,7 @@ function closePersonaConfigPanel() {
 
 function readCurrentPersonaConfig() {
     return {
-        prompt_settings_override: readCharPromptOverridesFromUI(),
+        prompt_settings_override: readCharPromptOverridesFromUI('#ass-persona-panel'),
         tracked_field_additions: readTFAdditionsFromUI(),
     };
 }
