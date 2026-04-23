@@ -422,10 +422,16 @@ function buildPersona() {
     const name = state.context.name1 || '';
     if (name) persona.name = name;
 
+    console.log(`[ASS DEBUG] typeof powerUserSettings:`, typeof powerUserSettings);
+    console.log(`[ASS DEBUG] typeof window:`, typeof window);
+    console.log(`[ASS DEBUG] window?.powerUserSettings?.persona_description:`, window?.powerUserSettings?.persona_description);
+
     const pus = typeof powerUserSettings !== 'undefined' ? powerUserSettings : (window.powerUserSettings || {});
     const desc = pus.persona_description || '';
+    console.log(`[ASS DEBUG] pus.persona_description:`, desc);
     if (desc) persona.description = desc;
 
+    console.log(`[ASS DEBUG] buildPersona result:`, persona);
     return Object.keys(persona).length > 0 ? persona : undefined;
 }
 
