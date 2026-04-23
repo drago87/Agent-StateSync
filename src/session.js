@@ -518,14 +518,13 @@ function buildGroupMemberPayload(charObj, firstMes) {
     } else if (config.type === 'scenario') {
         // Scenario: card data goes under "scenario" key instead of "character"
         member.scenario = cardData;
+    } else if (config.names.length === 1) {
+        // Single name override: card name differs from actual character name
+        member.character_names = config.names[0];
+        member.character = cardData;
     } else {
         // Plain character
         member.character = cardData;
-    }
-
-    // Single name override: card name differs from actual character name
-    if (config.type === 'character' && config.names.length === 1) {
-        member.character_names = config.names[0];
     }
 
     // --- Per-character tracked_field_additions and prompt_settings_override ---
