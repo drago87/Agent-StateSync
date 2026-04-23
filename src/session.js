@@ -422,7 +422,8 @@ function buildPersona() {
     const name = state.context.name1 || '';
     if (name) persona.name = name;
 
-    const desc = (typeof powerUserSettings !== 'undefined' && powerUserSettings.persona_description) || '';
+    const pus = typeof powerUserSettings !== 'undefined' ? powerUserSettings : (window.powerUserSettings || {});
+    const desc = pus.persona_description || '';
     if (desc) persona.description = desc;
 
     return Object.keys(persona).length > 0 ? persona : undefined;
