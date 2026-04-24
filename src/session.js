@@ -406,7 +406,6 @@ export async function manualInitSession() {
         startNotificationPolling();
 
         state.sessionInitialized = true;
-        updateInitButtonVisibility();
 
         const shortId = sessionId.substring(0, 8);
         toastr.success(`Session initialized: ${shortId}...`, 'Agent-StateSync');
