@@ -2,7 +2,7 @@
 //
 // Settings panel HTML/CSS, event bindings, character config button,
 // chat-changed event hook, and the main initialization IIFE.
-// File Version: 1.1.0
+// File Version: 1.2.0
 
 import state from './state.js';
 import {
@@ -651,8 +651,50 @@ export function updateInitButtonVisibility() {
 // #############################################
 
 export function hookChatEvents() {
-	// Listen for session deletion notifications from the polling system
+    // Listen for session deletion notifications from the polling system
     $(window).on('ass-session-deleted', updateInitButtonVisibility);
+
+    // Listen for chat rename events from SillyTavern
+    if (state.context.event_types?.CHAT_RENAMED) {
+        state.context.eventSource?.on(state.context.event_types.CHAT_RENAMED, async (eventData) => {
+            console.log(`[${EXTENSION_NAME}] Chat renamed:`, eventData);
+
+            const settings = getSettings();
+            if (!settings.enabled || !eventData) return;
+
+            // Strip .jsonl extension from file names
+            const oldFileName = (eventData.oldFileName || '').replace(/\.jsonl$/, '');
+            const newFileName = (eventData.newFileName || '').replace(/\.jsonl$/, '');
+
+            if (!oldFileName || !newFileName || oldFileName === newFileName) return;
+
+            const origin = getAgentOrigin();
+            if (!origin) return;
+
+            const sessionId = state.context.chatMetadata?.[META_KEY_SESSION];
+            if (!sessionId) return;
+
+            try {
+                const resp = await fetch(`${origin}/api/sessions/${sessionId}/rename-chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_chat_id: oldFileName,
+                        new_chat_id: newFileName,
+                    }),
+                });
+
+                if (resp.ok) {
+                    console.log(`[${EXTENSION_NAME}] Chat rename sent to Agent: ${oldFileName} -> ${newFileName}`);
+                } else {
+                    console.warn(`[${EXTENSION_NAME}] Agent rename returned ${resp.status}`);
+                }
+            } catch (e) {
+                console.warn(`[${EXTENSION_NAME}] Failed to send chat rename to Agent:`, e.message);
+            }
+        });
+    }
+
     const eventBus = state.context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {

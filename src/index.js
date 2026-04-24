@@ -2,11 +2,12 @@
 //
 // Webpack entry. Imports and initializes the extension.
 // manifest.json points to dist/index.js (the built output).
-// File Version: 1.0.2
+// File Version: 1.0.3
 
 import defaultConfig from './default-config.js';
 import { init } from './ui.js';
 import { registerSlashCommands } from './commands.js';
+import { setupChatRenameListener } from './listeners.js';
 
 (async function main() {
     let config = { ...defaultConfig };
@@ -89,4 +90,5 @@ import { registerSlashCommands } from './commands.js';
 
     await init(config.debug === true);
     registerSlashCommands();
+	setupChatRenameListener();
 })();

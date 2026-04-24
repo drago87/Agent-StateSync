@@ -9,7 +9,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.2.1
+// File Version: 1.3.0
 
 import state from './state.js';
 import {
@@ -644,6 +644,9 @@ function buildSingleCharInitPayload() {
         is_scenario: cardType === 'scenario',
         card_name: cardName,
     };
+	// Chat name (character card name)
+	const chatName = state.context.name2 || '';
+	if (chatName) payload.chat_name = chatName;
 
     // For multi-character, include character_names
     if (cardType === 'multi-character' && cardNames.length > 0) {
@@ -760,6 +763,10 @@ function buildGroupInitPayload() {
         group_name: state.activeGroup.name,
         group_members: memberPayloads,
     };
+	
+	// Chat name (group name)
+	const chatName = state.context.groups?.find(g => g.id === state.context.groupId)?.name || '';
+	if (chatName) payload.chat_name = chatName;
 
     // group_scenario: include only if non-empty
     if (groupScenario) {

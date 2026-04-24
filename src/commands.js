@@ -1,7 +1,7 @@
 // commands.js — Agent-StateSync Slash Commands
 //
 // Registers all /ass-* slash commands with SillyTavern.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import { EXTENSION_NAME } from './settings.js';
 import state from './state.js';
@@ -77,11 +77,23 @@ function showPayloadPopup(title, payload) {
 // # Commands
 // #############################################
 
-/** /ass-init — Preview the init payload */
+/** /ass-init — Preview the init payload with chat info */
 function cmdAssInit(args, text) {
     try {
+        const chatId = typeof state.context.getCurrentChatId === 'function'
+            ? state.context.getCurrentChatId() || '(none)'
+            : '(getCurrentChatId not available)';
+
         const payload = buildInitPayload();
-        showPayloadPopup('Init Payload Preview', payload);
+
+        const chatInfo = {
+            _chat_info: {
+                chat_id: chatId,
+                mode: state.isGroupChat ? 'group' : 'single-character',
+            },
+        };
+
+        showPayloadPopup('Init Payload Preview', { ...chatInfo, ...payload });
     } catch (err) {
         toastr.error(`Failed to build payload: ${err.message}`, 'Agent-StateSync');
         console.error(`[${EXTENSION_NAME}] buildInitPayload error:`, err);
