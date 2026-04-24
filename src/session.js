@@ -9,7 +9,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.3.0
+// File Version: 1.3.1
 
 import state from './state.js';
 import {
@@ -219,8 +219,8 @@ async function attachToExistingSession(origin, sessionId) {
 }
 
 /**
- * Show a confirmation popup asking the user to create a new Agent session
- * for the current chat.
+ * Show an informational popup when a new chat is detected.
+ * No auto-creation — reminds the user to press the Init button manually.
  */
 async function showNewChatConfirm(origin, chatId) {
     const chatLabel = state.isGroupChat && state.activeGroup
@@ -235,33 +235,28 @@ async function showNewChatConfirm(origin, chatId) {
             </h3>
             <p style="margin:0 0 4px 0;"><b>New chat detected:</b></p>
             <p style="margin:0 0 12px 0; color:var(--fg_dim);">${chatLabel}</p>
-            <p style="margin:0 0 4px 0;">Create a new Agent session for this chat?</p>
+            <p style="margin:0 0 12px 0;">Remember to initialize the chat before starting to chat.</p>
             <p style="margin:0 0 12px 0; font-size:11px; color:var(--fg_dim);">
-                The Agent will initialize with this chat's character/group data.
+                Press the Rocket button to initialize the chat with the Agent with this chat's character/group data.
             </p>
         </div>
     `;
 
-    // Use ST's built-in callPopup if available
+    // Use ST's built-in callPopup with a single OK button
     const popupFn = window.callPopup || state.context.callPopup;
     if (typeof popupFn === 'function') {
         try {
-            const confirmed = await popupFn(popupHtml, 'confirm');
-            if (confirmed) {
-                await createAndInitSession(origin, chatId);
-            } else {
-                updateStatus('No session (skipped)', '#f0ad4e');
-                console.log(`[${EXTENSION_NAME}] User declined session creation for chat ${chatId}`);
-            }
+            await popupFn(popupHtml, 'text');
+            updateStatus('No session (not initialized)', '#f0ad4e');
             return;
         } catch (e) {
-            console.warn(`[${EXTENSION_NAME}] callPopup failed, trying fallback:`, e.message);
+            console.warn(`[${EXTENSION_NAME}] callPopup failed:`, e.message);
         }
     }
 
-    // Fallback: auto-create without confirmation
-    console.log(`[${EXTENSION_NAME}] No popup available, auto-creating session`);
-    await createAndInitSession(origin, chatId);
+    // Fallback: just log it
+    console.log(`[${EXTENSION_NAME}] New chat detected (no popup): ${chatLabel}`);
+    updateStatus('No session (not initialized)', '#f0ad4e');
 }
 
 /**
