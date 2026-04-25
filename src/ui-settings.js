@@ -234,7 +234,7 @@ export function renderSettingsUI() {
                         <small><b>RP LLM IP:Port</b> (Creative Writer)</small>
                     </label>
                     <div class="ass-llm-row">
-                        <input type="text" id="ass-rp-url" class="text_pole wide" placeholder="192.168.0.1:5001">
+                        <input type="text" id="ass-rp-url" class="text_pole wide" placeholder="localhost:5001">
                         <span id="ass-rp-dot" class="ass-llm-dot ass-llm-dot-off" title="RP LLM: not checked"></span>
                     </div>
                     <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Runs the creative model for narrative generation.</small>
@@ -528,7 +528,7 @@ function renderInstructBackends() {
         const $row = $(`
             <div class="ass-instruct-backend-row" style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
                 <input type="text" class="text_pole ass-instruct-url-input" style="flex:2;"
-                       placeholder="http://192.168.0.1:11434" value="${backend.url || ''}">
+                       placeholder="http://localhost:5002" value="${backend.url || ''}">
                 <input type="text" class="text_pole ass-instruct-key-input" style="flex:1;"
                        placeholder="API Key" value="${backend.api_key || 'none'}">
                 <span class="ass-llm-dot ass-llm-dot-off ass-instruct-dot" data-index="${index}" title="Not checked"></span>
