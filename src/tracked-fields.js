@@ -251,7 +251,7 @@ function renderAllCategories($container) {
     syncFieldsFromDOM();
 
     const categories = [
-        { key: 'character', label: 'Character', open: true },
+        { key: 'character', label: 'Character', open: false },
         { key: 'scenario',  label: 'Scenario',  open: false },
         { key: 'shared',    label: 'Shared',    open: false },
     ];
