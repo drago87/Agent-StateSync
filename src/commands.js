@@ -1,11 +1,11 @@
 // commands.js — Agent-StateSync Slash Commands
 //
 // Registers all /ass-* slash commands with SillyTavern.
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import { EXTENSION_NAME } from './settings.js';
 import state from './state.js';
-import { buildInitPayload } from './session.js';
+import { buildInitPayload } from './init-payload.js';
 
 // #############################################
 // # Helpers

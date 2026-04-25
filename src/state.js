@@ -3,12 +3,12 @@
 // Single source of truth for all mutable state shared across modules.
 // All modules import this object and read/write its properties.
 // Since it's an object reference, mutations are visible everywhere.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 const state = {
     // SillyTavern context (set once during init)
     context: null,
-	// Debug mode (set from config.json at startup)
+        // Debug mode (set from config.json at startup)
     debug: false,
 
     // Config sync tracking
@@ -31,8 +31,9 @@ const state = {
     activeGroupCharacters: [],     // Full Character objects for active group members
     isGroupChat: false,            // Whether current chat is a group chat
 
-    // Proactive session tracking
+    // Session tracking
     proactiveInProgress: false,    // Prevents overlapping proactive calls
+    sessionInitialized: false,     // Whether the current chat has an initialized Agent session
 
     // Interceptor log for debug display
     lastInterceptLog: null,

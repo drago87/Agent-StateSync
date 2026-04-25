@@ -2,7 +2,7 @@
 //
 // Auto-detects the Agent URL from SillyTavern's Custom Endpoint setting.
 // Manages health check pinging, LLM status display, and reconnect logic.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -141,12 +141,12 @@ function resetLlmDots(reason) {
         rpDot.addClass('ass-llm-dot-off');
         rpDot.attr('title', `RP LLM: ${reason}`);
     }
-    const instructDot = $('#ass-instruct-dot');
-    if (instructDot.length) {
-        instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red');
-        instructDot.addClass('ass-llm-dot-off');
-        instructDot.attr('title', `Instruct LLM: ${reason}`);
-    }
+    // Reset all instruct backend dots
+    $('.ass-instruct-dot').each(function () {
+        $(this).removeClass('ass-llm-dot-green ass-llm-dot-red');
+        $(this).addClass('ass-llm-dot-off');
+        $(this).attr('title', `Instruct LLM: ${reason}`);
+    });
 }
 
 /**
@@ -192,21 +192,23 @@ async function checkLlmStatuses() {
             }
         }
 
-        // Instruct LLM
-        const instructDot = $('#ass-instruct-dot');
-        if (instructDot.length) {
-            instructDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
+        // Instruct LLM backends — update all per-backend dots
+        // The Agent currently returns a single instruct_llm status;
+        // apply it to all instruct backend dots until per-backend
+        // status is supported by the Agent API.
+        $('.ass-instruct-dot').each(function () {
+            $(this).removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
             if (status.instruct_llm_disabled) {
-                instructDot.addClass('ass-llm-dot-off');
-                instructDot.attr('title', 'Instruct LLM: disabled (config.ini)');
+                $(this).addClass('ass-llm-dot-off');
+                $(this).attr('title', 'Instruct LLM: disabled (config.ini)');
             } else if (status.instruct_llm_connected) {
-                instructDot.addClass('ass-llm-dot-green');
-                instructDot.attr('title', 'Instruct LLM: online (via Agent)');
+                $(this).addClass('ass-llm-dot-green');
+                $(this).attr('title', 'Instruct LLM: online (via Agent)');
             } else {
-                instructDot.addClass('ass-llm-dot-red');
-                instructDot.attr('title', 'Instruct LLM: offline (via Agent)');
+                $(this).addClass('ass-llm-dot-red');
+                $(this).attr('title', 'Instruct LLM: offline (via Agent)');
             }
-        }
+        });
     } catch (e) {
         // Silent — will retry on next health check cycle
         console.debug(`[${EXTENSION_NAME}] LLM status check via Agent failed:`, e.message);

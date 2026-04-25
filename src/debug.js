@@ -2,7 +2,7 @@
 //
 // Executes diagnostic commands and returns formatted output strings
 // for display in the debug panel textbox.
-// File Version: 1.0.1
+// File Version: 1.0.2
 
 import state from './state.js';
 import {
@@ -10,7 +10,7 @@ import {
 } from './settings.js';
 import { fetchGroupsFromServer, findActiveGroup, loadGroupData } from './groups.js';
 import { buildMetaTag, getMessageId } from './pipeline.js';
-import { buildInitPayload } from './session.js';
+import { buildInitPayload } from './init-payload.js';
 
 // #############################################
 // # 12. Debug Command Handlers
@@ -279,8 +279,8 @@ export async function executeDebugCommand(command) {
                 add(state.lastInterceptLog.metaTag);
                 break;
             }
-			
-			case 'persona': {
+                        
+                        case 'persona': {
                 add('=== Persona / User Description Search ===');
                 add('');
 

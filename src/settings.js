@@ -2,7 +2,7 @@
 //
 // All constant definitions, default settings, settings CRUD operations,
 // and small utility functions (hashing, status text, debug output).
-// File Version: 1.0.1
+// File Version: 1.0.3
 
 import state from './state.js';
 import defaultConfig from './default-config.js';
@@ -55,8 +55,8 @@ export const HEALTH_CHECK_TIMEOUT_MS = 5000;   // 5 second timeout per check
 export const defaultSettings = {
     enabled: false,
     bypassMode: false,          // When true, don't connect to Agent — return dummy responses
-    rpLlmUrl: '192.168.0.1:5001',
-    instructLlmUrl: '192.168.0.1:11434',
+    rpLlmUrl: 'http://localhost:5001',
+    instructLlmBackends: [{ url: '', api_key: 'none' }],
     rpTemplate: 'chatml',
     instructTemplate: 'llama3',
     thinkingSteps: 0,
@@ -121,7 +121,7 @@ export const DEBUG_COMMANDS = [
     { value: 'init_payload', label: 'Preview Init Payload' },
     { value: 'session_lookup', label: 'Session Metadata' },
     { value: 'last_intercept', label: 'Last Intercepted Request' },
-	{ value: 'persona', label: 'Persona Search' },
+        { value: 'persona', label: 'Persona Search' },
 ];
 
 // #############################################
@@ -161,7 +161,7 @@ export async function syncConfigToAgent(settings, originOverride) {
             thinking_steps: settings.thinkingSteps,
             refinement_steps: settings.refinementSteps,
             rp_llm_url: settings.rpLlmUrl || '(not set)',
-            instruct_llm_url: settings.instructLlmUrl || '(not set)',
+            instruct_llm_backends: settings.instructLlmBackends || '(not set)',
         });
         state.configSynced = true;
         return;
@@ -197,8 +197,14 @@ export async function syncConfigToAgent(settings, originOverride) {
     if (settings.rpLlmUrl && settings.rpLlmUrl.trim()) {
         configPayload.rp_llm_url = settings.rpLlmUrl.trim();
     }
-    if (settings.instructLlmUrl && settings.instructLlmUrl.trim()) {
-        configPayload.instruct_llm_url = settings.instructLlmUrl.trim();
+    if (Array.isArray(settings.instructLlmBackends) && settings.instructLlmBackends.length > 0) {
+        const valid = settings.instructLlmBackends.filter(b => b.url && b.url.trim());
+        if (valid.length > 0) {
+            configPayload.instruct_llm_backends = valid.map(b => ({
+                url: b.url.trim(),
+                api_key: b.api_key || 'none',
+            }));
+        }
     }
 
     try {
