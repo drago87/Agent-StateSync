@@ -1,18 +1,21 @@
 // ui-settings.js — Agent-StateSync Settings Panel Rendering
 //
-// Settings panel HTML/CSS, event bindings, Instruct LLM backends
-// dynamic list, and all change handlers.
+// Settings panel HTML/CSS, event bindings, and all change handlers.
+//
+// LLM settings (RP LLM URL, Instruct LLM Backends, Templates) are now
+// managed by the Agent. They are displayed as read-only fields (like
+// the Agent URL) and updated from state.agentLlmConfig.
 //
 // Extracted from ui.js to keep the settings UI separate from
 // the initialization orchestrator and button injection logic.
-// File Version: 1.0.0
+// File Version: 2.0.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME,
-    TEMPLATE_OPTIONS, THINKING_OPTIONS, REFINEMENT_OPTIONS, HISTORY_OPTIONS,
+    THINKING_OPTIONS, REFINEMENT_OPTIONS, HISTORY_OPTIONS,
     DEBUG_COMMANDS,
-    getSettings, saveSettings, isBypassMode, syncConfigToAgent, updateStatus, setDebugOutput,
+    getSettings, saveSettings, syncConfigToAgent, updateStatus, setDebugOutput,
 } from './settings.js';
 import {
     getAgentOrigin, refreshAgentUrlDisplay, handleReconnect,
@@ -104,7 +107,7 @@ export function injectCustomCSS() {
             cursor: not-allowed;
         }
 
-        /* Read-only Agent URL display */
+        /* Read-only URL/config display (shared by Agent URL, RP LLM, Instruct backends) */
         .ass-url-display {
             display: flex;
             align-items: center;
@@ -128,15 +131,7 @@ export function injectCustomCSS() {
             white-space: nowrap;
         }
 
-        /* Small LLM status dot next to input fields */
-        .ass-llm-row {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .ass-llm-row .text_pole {
-            flex: 1;
-        }
+        /* Small LLM status dot next to displays */
         .ass-llm-dot {
             display: inline-block;
             width: 10px;
@@ -149,6 +144,10 @@ export function injectCustomCSS() {
             background-color: #5cb85c;
             box-shadow: 0 0 4px 1px rgba(92, 184, 92, 0.5);
         }
+        .ass-llm-dot-yellow {
+            background-color: #f0ad4e;
+            box-shadow: 0 0 4px 1px rgba(240, 173, 78, 0.5);
+        }
         .ass-llm-dot-red {
             background-color: #d9534f;
             box-shadow: 0 0 4px 1px rgba(217, 83, 79, 0.4);
@@ -158,10 +157,20 @@ export function injectCustomCSS() {
             box-shadow: none;
         }
 
-                /* Init Session button (rocket icon in chat controls) */
-                #ass-init-session-btn {
-                        cursor: pointer;
-                }
+        /* LLM config label (e.g. template name) */
+        .ass-llm-label {
+            font-size: 11px;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: rgba(128, 128, 128, 0.2);
+            color: var(--fg_dim);
+            white-space: nowrap;
+        }
+
+        /* Init Session button (rocket icon in chat controls) */
+        #ass-init-session-btn {
+            cursor: pointer;
+        }
     </style>`;
 
     $('head').append(css);
@@ -173,8 +182,7 @@ export function injectCustomCSS() {
 
 /**
  * Called when any setting changes — re-syncs config to Agent.
- * Defined at module level so renderInstructBackends() and other
- * standalone functions can call it.
+ * Defined at module level so other functions can call it.
  */
 function onSettingChange() {
     const updated = getSettings();
@@ -228,50 +236,34 @@ export function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- RP LLM -->
+                <!-- RP LLM (read-only, from Agent) -->
                 <div class="margin-bot-10">
                     <label class="title_restorable">
-                        <small><b>RP LLM IP:Port</b> (Creative Writer)</small>
+                        <small><b>RP LLM IP:Port</b> <i>(from Agent)</i></small>
                     </label>
-                    <div class="ass-llm-row">
-                        <input type="text" id="ass-rp-url" class="text_pole wide" placeholder="localhost:5001">
+                    <div class="ass-url-display" id="ass-rp-llm-display">
                         <span id="ass-rp-dot" class="ass-llm-dot ass-llm-dot-off" title="RP LLM: not checked"></span>
+                        <i class="fa-solid fa-pen-fancy" style="opacity:0.5;"></i>
+                        <span class="ass-url-value" id="ass-rp-llm-text">Waiting for Agent...</span>
+                        <span class="ass-llm-label" id="ass-rp-llm-template" style="display:none;"></span>
                     </div>
-                    <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Runs the creative model for narrative generation.</small>
+                    <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Configured on the Agent side.</small>
                 </div>
 
+                <!-- Instruct LLM Backends (read-only, dynamic from Agent) -->
                 <div class="margin-bot-10">
                     <label class="title_restorable">
-                        <small>RP LLM Template</small>
+                        <small><b>Instruct LLM Backends</b> <i>(from Agent)</i></small>
                     </label>
-                    <select id="ass-rp-template" class="text_pole wide">
-                        ${buildOptions(TEMPLATE_OPTIONS, getSettings().rpTemplate)}
-                    </select>
-                    <small>Message format template. Set to Raw if your endpoint handles its own formatting (e.g., Koboldcpp native mode).</small>
-                </div>
-
-                <!-- Instruct LLM -->
-                <div class="margin-bot-10">
-                    <label class="title_restorable">
-                        <small><b>Instruct LLM Backends</b> (Data Logger)</small>
-                    </label>
-                    <div id="ass-instruct-backends-container"></div>
-                    <div style="margin-top:6px;">
-                        <button id="ass-add-instruct-backend" class="menu_button" type="button" style="font-size:12px;">
-                            <i class="fa-solid fa-plus"></i> Add Backend
-                        </button>
+                    <div id="ass-instruct-backends-container">
+                        <!-- Placeholder row — replaced by updateLlmDisplay() when Agent config arrives -->
+                        <div class="ass-url-display ass-instruct-backend-row" style="margin-bottom:4px;">
+                            <span class="ass-llm-dot ass-llm-dot-off ass-instruct-dot" data-index="0" title="Not checked"></span>
+                            <i class="fa-solid fa-database" style="opacity:0.5;"></i>
+                            <span class="ass-url-value" style="color:#d9534f;">Waiting for Agent...</span>
+                        </div>
                     </div>
                     <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoints. The Agent will load-balance across available backends.</small>
-                </div>
-
-                <div class="margin-bot-10">
-                    <label class="title_restorable">
-                        <small>Instruct LLM Template</small>
-                    </label>
-                    <select id="ass-instruct-template" class="text_pole wide">
-                        ${buildOptions(TEMPLATE_OPTIONS, getSettings().instructTemplate)}
-                    </select>
-                    <small>Message format template. Set to Raw if your endpoint handles its own formatting (e.g., Ollama native mode).</small>
                 </div>
 
                 <hr class="sysHR">
@@ -377,10 +369,7 @@ export function renderSettingsUI() {
     // --- Bind current values ---
     const s = getSettings();
     $('#ass-toggle').prop('checked', s.enabled);
-    $('#ass-rp-url').val(s.rpLlmUrl);
 
-    $('#ass-rp-template').val(s.rpTemplate);
-    $('#ass-instruct-template').val(s.instructTemplate);
     $('#ass-thinking').val(s.thinkingSteps);
     $('#ass-refinement').val(s.refinementSteps);
     $('#ass-history').val(s.historyCount);
@@ -401,27 +390,6 @@ export function renderSettingsUI() {
             stopHealthChecks();
             setConnectionStatus(false, 'Extension disabled');
         }
-    });
-
-    $('#ass-rp-url').on('change', function () {
-        const settings = getSettings();
-        settings.rpLlmUrl = $(this).val().trim();
-        saveSettings(settings);
-        onSettingChange();
-    });
-
-    $('#ass-rp-template').on('change', function () {
-        const settings = getSettings();
-        settings.rpTemplate = $(this).val();
-        saveSettings(settings);
-        onSettingChange();
-    });
-
-    $('#ass-instruct-template').on('change', function () {
-        const settings = getSettings();
-        settings.instructTemplate = $(this).val();
-        saveSettings(settings);
-        onSettingChange();
     });
 
     $('#ass-thinking').on('change', function () {
@@ -493,10 +461,6 @@ export function renderSettingsUI() {
         });
     }
 
-    // --- Render Instruct LLM backends list ---
-    renderInstructBackends();
-    $('#ass-add-instruct-backend').on('click', addInstructBackend);
-
     // --- Initialize tracked fields UI ---
     initTrackedFieldsUI();
 
@@ -507,80 +471,4 @@ export function renderSettingsUI() {
     if (s.enabled) {
         startHealthChecks();
     }
-}
-
-// #############################################
-// # Instruct LLM Backends Dynamic List
-// #############################################
-
-/**
- * Render the dynamic list of Instruct LLM backend entries.
- */
-function renderInstructBackends() {
-    const settings = getSettings();
-    const backends = settings.instructLlmBackends || [];
-    const $container = $('#ass-instruct-backends-container');
-
-    // Remove existing rows (but not the container itself)
-    $container.empty();
-
-    backends.forEach((backend, index) => {
-        const $row = $(`
-            <div class="ass-instruct-backend-row" style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-                <input type="text" class="text_pole ass-instruct-url-input" style="flex:2;"
-                       placeholder="http://localhost:5002" value="${backend.url || ''}">
-                <input type="text" class="text_pole ass-instruct-key-input" style="flex:1;"
-                       placeholder="API Key" value="${backend.api_key || 'none'}">
-                <span class="ass-llm-dot ass-llm-dot-off ass-instruct-dot" data-index="${index}" title="Not checked"></span>
-                <button class="ass-remove-instruct-backend" data-index="${index}" type="button"
-                        title="Remove this backend"
-                        style="padding:3px 8px; border:1px solid rgba(128,128,128,0.3); border-radius:4px;
-                               background:rgba(128,128,128,0.1); color:var(--fg); cursor:pointer; font-size:11px;">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-        `);
-        $container.append($row);
-    });
-
-    // Bind change handlers
-    $container.find('.ass-instruct-url-input').on('change', function () {
-        const idx = $(this).closest('.ass-instruct-backend-row').index();
-        const settings = getSettings();
-        if (!settings.instructLlmBackends[idx]) return;
-        settings.instructLlmBackends[idx].url = $(this).val().trim();
-        saveSettings(settings);
-        onSettingChange();
-    });
-
-    $container.find('.ass-instruct-key-input').on('change', function () {
-        const idx = $(this).closest('.ass-instruct-backend-row').index();
-        const settings = getSettings();
-        if (!settings.instructLlmBackends[idx]) return;
-        settings.instructLlmBackends[idx].api_key = $(this).val().trim();
-        saveSettings(settings);
-        onSettingChange();
-    });
-
-    $container.find('.ass-remove-instruct-backend').on('click', function () {
-        const idx = $(this).data('index');
-        const settings = getSettings();
-        settings.instructLlmBackends.splice(idx, 1);
-        saveSettings(settings);
-        renderInstructBackends();
-        onSettingChange();
-    });
-}
-
-/**
- * Add a new empty backend entry to the list.
- */
-function addInstructBackend() {
-    const settings = getSettings();
-    if (!Array.isArray(settings.instructLlmBackends)) {
-        settings.instructLlmBackends = [];
-    }
-    settings.instructLlmBackends.push({ url: '', api_key: 'none' });
-    saveSettings(settings);
-    renderInstructBackends();
 }

@@ -2,7 +2,11 @@
 //
 // All constant definitions, default settings, settings CRUD operations,
 // and small utility functions (hashing, status text, debug output).
-// File Version: 1.0.3
+//
+// LLM settings (URLs, templates, backends) are now managed by the Agent.
+// STe only sends non-LLM settings via POST /api/config and receives
+// the Agent's LLM config in the response.
+// File Version: 2.0.0
 
 import state from './state.js';
 import defaultConfig from './default-config.js';
@@ -52,13 +56,11 @@ export const HISTORY_OPTIONS = [
 export const HEALTH_CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;   // 5 second timeout per check
 
+// LLM settings (rpLlmUrl, instructLlmBackends, rpTemplate, instructTemplate)
+// have been moved to the Agent side. STe only stores non-LLM settings.
 export const defaultSettings = {
     enabled: false,
     bypassMode: false,          // When true, don't connect to Agent — return dummy responses
-    rpLlmUrl: 'http://localhost:5001',
-    instructLlmBackends: [{ url: '', api_key: 'none' }],
-    rpTemplate: 'chatml',
-    instructTemplate: 'llama3',
     thinkingSteps: 0,
     refinementSteps: 0,
     historyCount: 2,
@@ -121,7 +123,7 @@ export const DEBUG_COMMANDS = [
     { value: 'init_payload', label: 'Preview Init Payload' },
     { value: 'session_lookup', label: 'Session Metadata' },
     { value: 'last_intercept', label: 'Last Intercepted Request' },
-        { value: 'persona', label: 'Persona Search' },
+    { value: 'persona', label: 'Persona Search' },
 ];
 
 // #############################################
@@ -147,21 +149,60 @@ export function saveSettings(settings) {
 }
 
 /**
- * Push LLM addresses + template config to the Agent.
+ * Store LLM config from Agent into state and notify listeners.
+ * Called from syncConfigToAgent() and session.js when the Agent
+ * returns LLM config in its response.
+ *
+ * @param {object} data - Object with rp_llm and/or instruct_llm
+ */
+export function storeLlmConfig(data) {
+    let changed = false;
+
+    if (data.rp_llm) {
+        state.agentLlmConfig.rp_llm = {
+            url: data.rp_llm.url || '',
+            health: data.rp_llm.health || 'unknown',
+            template: data.rp_llm.template || '',
+        };
+        changed = true;
+    }
+    if (data.instruct_llm) {
+        state.agentLlmConfig.instruct_llm = {
+            backends: Array.isArray(data.instruct_llm.backends)
+                ? data.instruct_llm.backends.map(b => ({
+                    url: b.url || '',
+                    health: b.health || 'unknown',
+                }))
+                : [],
+        };
+        changed = true;
+    }
+    // Track config version if provided
+    if (data.config_version !== undefined) {
+        state.configVersion = data.config_version;
+    }
+
+    if (changed) {
+        // Notify agent-url.js to update the read-only LLM displays.
+        // Using a custom event avoids circular dependency between
+        // settings.js and agent-url.js.
+        window.dispatchEvent(new CustomEvent('ass-llm-config-changed'));
+    }
+}
+
+/**
+ * Push non-LLM settings to the Agent.
+ * The Agent responds with its LLM config for STe to apply.
+ *
  * @param {object} settings - The current settings object
- * @param {string|null} originOverride - Agent origin URL (optional;
- *   if omitted, resolved inline from ST context)
+ * @param {string|null} originOverride - Agent origin URL (optional)
  */
 export async function syncConfigToAgent(settings, originOverride) {
     if (!settings.enabled) return;
     if (isBypassMode()) {
-        console.log(`[${EXTENSION_NAME}] [BYPASS] Config sync skipped (bypass mode). Would have sent:`, {
-            rp_template: settings.rpTemplate,
-            instruct_template: settings.instructTemplate,
+        console.log(`[${EXTENSION_NAME}] [BYPASS] Config sync skipped. Would have sent:`, {
             thinking_steps: settings.thinkingSteps,
             refinement_steps: settings.refinementSteps,
-            rp_llm_url: settings.rpLlmUrl || '(not set)',
-            instruct_llm_backends: settings.instructLlmBackends || '(not set)',
         });
         state.configSynced = true;
         return;
@@ -185,27 +226,12 @@ export async function syncConfigToAgent(settings, originOverride) {
         return;
     }
 
+    // STe now only sends non-LLM settings.
+    // LLM URLs, templates, and backends are managed by the Agent.
     const configPayload = {
-        rp_template: settings.rpTemplate,
-        instruct_template: settings.instructTemplate,
         thinking_steps: settings.thinkingSteps,
         refinement_steps: settings.refinementSteps,
     };
-
-    // Only include URL fields if they have actual values.
-    // The Agent uses config.ini fallbacks when URLs are not provided.
-    if (settings.rpLlmUrl && settings.rpLlmUrl.trim()) {
-        configPayload.rp_llm_url = settings.rpLlmUrl.trim();
-    }
-    if (Array.isArray(settings.instructLlmBackends) && settings.instructLlmBackends.length > 0) {
-        const valid = settings.instructLlmBackends.filter(b => b.url && b.url.trim());
-        if (valid.length > 0) {
-            configPayload.instruct_llm_backends = valid.map(b => ({
-                url: b.url.trim(),
-                api_key: b.api_key || 'none',
-            }));
-        }
-    }
 
     try {
         const resp = await fetch(`${origin}/api/config`, {
@@ -217,6 +243,17 @@ export async function syncConfigToAgent(settings, originOverride) {
         if (resp.ok) {
             state.configSynced = true;
             console.log(`[${EXTENSION_NAME}] Config synced to Agent.`, Object.keys(configPayload));
+
+            // The Agent responds with its LLM config — parse and store it.
+            try {
+                const data = await resp.json();
+                if (data && (data.rp_llm || data.instruct_llm)) {
+                    storeLlmConfig(data);
+                    console.log(`[${EXTENSION_NAME}] LLM config received from Agent response.`);
+                }
+            } catch (e) {
+                // Response may not include LLM config (older Agent version) — that's OK
+            }
         } else {
             console.warn(`[${EXTENSION_NAME}] Agent config sync returned ${resp.status}. Will retry.`);
         }

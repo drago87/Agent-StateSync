@@ -3,12 +3,12 @@
 // Single source of truth for all mutable state shared across modules.
 // All modules import this object and read/write its properties.
 // Since it's an object reference, mutations are visible everywhere.
-// File Version: 1.0.1
+// File Version: 1.1.0
 
 const state = {
     // SillyTavern context (set once during init)
     context: null,
-        // Debug mode (set from config.json at startup)
+    // Debug mode (set from config.json at startup)
     debug: false,
 
     // Config sync tracking
@@ -37,6 +37,18 @@ const state = {
 
     // Interceptor log for debug display
     lastInterceptLog: null,
+
+    // Runtime LLM config from Agent (not persisted in ST settings).
+    // Updated via GET /api/config/ste, GET /api/llm/health, POST /api/config.
+    // Health values: "online" | "degraded" | "offline" | "unknown"
+    agentLlmConfig: {
+        rp_llm: { url: '', health: 'unknown', template: '' },
+        instruct_llm: { backends: [] },
+    },
+
+    // Config version counter — sent in POST /api/ping so the Agent can
+    // tell STe whether its config has changed since the last check.
+    configVersion: null,
 };
 
 export default state;

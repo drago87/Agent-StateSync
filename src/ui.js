@@ -4,14 +4,14 @@
 // injected buttons (ui-buttons), chat event hooks, and the main init()
 // entry point.  Keeps the initialization flow in one place while
 // delegating rendering to focused modules.
-// File Version: 2.0.0
+// File Version: 2.1.0
 
 import state from './state.js';
 import {
-    EXTENSION_NAME, SETTINGS_KEY, META_KEY_SESSION,
+    EXTENSION_NAME, SETTINGS_KEY,
     defaultSettings, getSettings,
 } from './settings.js';
-import { getAgentOrigin, refreshAgentUrlDisplay, startHealthChecks } from './agent-url.js';
+import { getAgentOrigin, refreshAgentUrlDisplay, startHealthChecks, fetchLlmConfig } from './agent-url.js';
 import { proactiveChatChanged } from './session.js';
 import { interceptFetch } from './pipeline.js';
 import { initCharConfig } from './char-config.js';
@@ -44,7 +44,7 @@ export function hookChatEvents() {
             const origin = getAgentOrigin();
             if (!origin) return;
 
-            const sessionId = state.context.chatMetadata?.[META_KEY_SESSION];
+            const sessionId = state.context.chatMetadata?.['world_session_id'];
             if (!sessionId) return;
 
             try {
@@ -117,9 +117,11 @@ export function init(debug = false) {
 
         state.context = window.SillyTavern.getContext();
 
-        // Migrate old settings format (remove agentUrl if present)
+        // --- Migrate old settings format ---
         if (state.context.extensionSettings[SETTINGS_KEY]) {
             const stored = state.context.extensionSettings[SETTINGS_KEY];
+
+            // Remove deprecated agentUrl (now auto-detected)
             if (stored.agentUrl !== undefined) {
                 delete stored.agentUrl;
                 console.log(`[${EXTENSION_NAME}] Removed deprecated agentUrl setting (now auto-detected).`);
@@ -127,13 +129,32 @@ export function init(debug = false) {
             if (stored.manualOverride !== undefined) {
                 delete stored.manualOverride;
             }
+
+            // Migrate old single-URL format to array format (intermediate migration)
             if (stored.instructLlmUrl !== undefined) {
-                // Migrate old single-URL format to new array format
                 if (stored.instructLlmUrl && !stored.instructLlmBackends) {
                     stored.instructLlmBackends = [{ url: stored.instructLlmUrl, api_key: 'none' }];
                 }
                 delete stored.instructLlmUrl;
                 console.log(`[${EXTENSION_NAME}] Migrated instructLlmUrl to instructLlmBackends.`);
+            }
+
+            // Remove LLM settings now managed by the Agent
+            if (stored.rpLlmUrl !== undefined) {
+                delete stored.rpLlmUrl;
+                console.log(`[${EXTENSION_NAME}] Removed deprecated rpLlmUrl setting (now Agent-managed).`);
+            }
+            if (stored.instructLlmBackends !== undefined) {
+                delete stored.instructLlmBackends;
+                console.log(`[${EXTENSION_NAME}] Removed deprecated instructLlmBackends setting (now Agent-managed).`);
+            }
+            if (stored.rpTemplate !== undefined) {
+                delete stored.rpTemplate;
+                console.log(`[${EXTENSION_NAME}] Removed deprecated rpTemplate setting (now Agent-managed).`);
+            }
+            if (stored.instructTemplate !== undefined) {
+                delete stored.instructTemplate;
+                console.log(`[${EXTENSION_NAME}] Removed deprecated instructTemplate setting (now Agent-managed).`);
             }
         }
 
@@ -172,6 +193,9 @@ export function init(debug = false) {
                 try {
                     await proactiveChatChanged();
                     updateInitButtonVisibility();
+
+                    // Fetch the Agent's LLM config for display
+                    await fetchLlmConfig();
                 } catch (e) {
                     console.warn(`[${EXTENSION_NAME}] Initial proactive setup failed:`, e.message);
                 }

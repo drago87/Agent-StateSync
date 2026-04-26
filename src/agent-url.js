@@ -1,8 +1,13 @@
 // agent-url.js — Agent-StateSync URL Resolution & Health Checks
 //
 // Auto-detects the Agent URL from SillyTavern's Custom Endpoint setting.
-// Manages health check pinging, LLM status display, and reconnect logic.
-// File Version: 1.0.1
+// Manages health check pinging, LLM status display (sourced from Agent),
+// and reconnect logic.
+//
+// LLM config is now managed by the Agent. STe displays it read-only
+// via fetchLlmConfig() and checkLlmHealth(), which update the
+// state.agentLlmConfig object and the read-only UI displays.
+// File Version: 2.0.0
 
 import state from './state.js';
 import {
@@ -10,6 +15,7 @@ import {
     getSettings,
     isBypassMode,
     syncConfigToAgent,
+    storeLlmConfig,
     updateStatus,
     HEALTH_CHECK_INTERVAL_MS,
     HEALTH_CHECK_TIMEOUT_MS,
@@ -69,6 +75,144 @@ export function getAgentHostPort() {
 }
 
 // #############################################
+// # LLM Config & Display Helpers
+// #############################################
+
+/**
+ * Extract host:port from a full URL for display purposes.
+ * @param {string} url - Full URL like "http://192.168.0.50:5001"
+ * @returns {string} Host:port like "192.168.0.50:5001"
+ */
+function extractHostPort(url) {
+    if (!url) return '';
+    try {
+        const urlObj = new URL(url);
+        const port = urlObj.port || (urlObj.protocol === 'https:' ? '443' : '80');
+        return `${urlObj.hostname}:${port}`;
+    } catch (e) {
+        return url; // fallback: return as-is
+    }
+}
+
+/**
+ * Get the CSS class for an LLM health dot based on health status.
+ * @param {string} health - "online" | "degraded" | "offline" | "unknown"
+ * @returns {string} CSS class name
+ */
+function getHealthDotClass(health) {
+    switch (health) {
+        case 'online':  return 'ass-llm-dot-green';
+        case 'degraded': return 'ass-llm-dot-yellow';
+        case 'offline': return 'ass-llm-dot-red';
+        default:        return 'ass-llm-dot-off';
+    }
+}
+
+/**
+ * Fetch LLM config from Agent via GET /api/config/ste.
+ * Stores result in state.agentLlmConfig and updates the read-only display.
+ * Called on first connect, reconnect, and when config changes are detected.
+ */
+export async function fetchLlmConfig() {
+    const origin = getAgentOrigin();
+    if (!origin) return;
+
+    if (isBypassMode()) {
+        console.log(`[${EXTENSION_NAME}] [BYPASS] LLM config fetch skipped`);
+        return;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
+        const resp = await fetch(`${origin}/api/config/ste`, {
+            method: 'GET',
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        storeLlmConfig(data);
+        updateLlmDisplay();
+        console.log(`[${EXTENSION_NAME}] LLM config fetched from Agent:`, state.agentLlmConfig);
+    } catch (e) {
+        console.debug(`[${EXTENSION_NAME}] LLM config fetch failed:`, e.message);
+    }
+}
+
+/**
+ * Update the read-only LLM displays in the settings panel.
+ * Reads from state.agentLlmConfig and renders the RP LLM display
+ * and dynamic Instruct LLM backends list.
+ */
+export function updateLlmDisplay() {
+    // --- RP LLM display ---
+    const $rpText = $('#ass-rp-llm-text');
+    const $rpDot = $('#ass-rp-dot');
+    const $rpTemplate = $('#ass-rp-llm-template');
+
+    if ($rpText.length) {
+        const rpLlm = state.agentLlmConfig.rp_llm;
+        if (rpLlm.url) {
+            $rpText.text(extractHostPort(rpLlm.url));
+            $rpText.css('color', '');
+        } else {
+            $rpText.text('Not configured (Agent side)');
+            $rpText.css('color', '#d9534f');
+        }
+    }
+
+    if ($rpDot.length) {
+        const rpLlm = state.agentLlmConfig.rp_llm;
+        $rpDot.removeClass('ass-llm-dot-green ass-llm-dot-yellow ass-llm-dot-red ass-llm-dot-off');
+        $rpDot.addClass(getHealthDotClass(rpLlm.health));
+        $rpDot.attr('title', `RP LLM: ${rpLlm.health || 'not checked'}`);
+    }
+
+    if ($rpTemplate.length) {
+        const template = state.agentLlmConfig.rp_llm.template;
+        if (template) {
+            $rpTemplate.text(template);
+            $rpTemplate.show();
+        } else {
+            $rpTemplate.hide();
+        }
+    }
+
+    // --- Instruct LLM backends display ---
+    const $container = $('#ass-instruct-backends-container');
+    if ($container.length) {
+        const backends = state.agentLlmConfig.instruct_llm.backends;
+
+        // Always show at least one row; if no backends from Agent,
+        // show a single "Not configured" placeholder.
+        const displayBackends = backends.length > 0
+            ? backends
+            : [{ url: '', health: 'unknown' }];
+
+        $container.empty();
+
+        displayBackends.forEach((backend, index) => {
+            const hostPort = backend.url ? extractHostPort(backend.url) : 'Not configured (Agent side)';
+            const dotClass = getHealthDotClass(backend.health);
+            const dotTitle = `Instruct LLM ${index + 1}: ${backend.health || 'not checked'}`;
+            const valueStyle = !backend.url ? 'color:#d9534f;' : '';
+
+            const $row = $(`
+                <div class="ass-url-display ass-instruct-backend-row" style="margin-bottom:4px;">
+                    <span class="ass-llm-dot ${dotClass} ass-instruct-dot" data-index="${index}" title="${dotTitle}"></span>
+                    <i class="fa-solid fa-database" style="opacity:0.5;"></i>
+                    <span class="ass-url-value" style="${valueStyle}">${hostPort}</span>
+                </div>
+            `);
+            $container.append($row);
+        });
+    }
+}
+
+// #############################################
 // # 5. Connection Health Check
 // #############################################
 
@@ -87,6 +231,7 @@ function getHealthCheckUrl() {
 
 /**
  * Ping the Agent's /health endpoint.
+ * On success, also checks LLM health and fetches config on first connect.
  */
 export async function checkAgentHealth() {
     const url = getHealthCheckUrl();
@@ -113,11 +258,12 @@ export async function checkAgentHealth() {
             const sessionCount = data.sessions || 0;
             setConnectionStatus(true, `Connected - ${sessionCount} session(s)`);
 
-            // Also ping the dashboard so the ST Extension light stays green
+            // Ping the dashboard so the ST Extension light stays green
             pingAgent(url);
 
-            // Check LLM backend status (fire-and-forget, don't block health check)
-            checkLlmStatuses();
+            // Check LLM backend health via the new endpoint
+            // (fire-and-forget, don't block health check)
+            checkLlmHealth();
 
             return true;
         } else {
@@ -134,96 +280,112 @@ export async function checkAgentHealth() {
     }
 }
 
+/**
+ * Reset LLM status dots to "not checked" state.
+ */
 function resetLlmDots(reason) {
     const rpDot = $('#ass-rp-dot');
     if (rpDot.length) {
-        rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red');
+        rpDot.removeClass('ass-llm-dot-green ass-llm-dot-yellow ass-llm-dot-red');
         rpDot.addClass('ass-llm-dot-off');
         rpDot.attr('title', `RP LLM: ${reason}`);
     }
     // Reset all instruct backend dots
     $('.ass-instruct-dot').each(function () {
-        $(this).removeClass('ass-llm-dot-green ass-llm-dot-red');
+        $(this).removeClass('ass-llm-dot-green ass-llm-dot-yellow ass-llm-dot-red');
         $(this).addClass('ass-llm-dot-off');
         $(this).attr('title', `Instruct LLM: ${reason}`);
     });
 }
 
 /**
- * Update the LLM status dots in the extension settings panel.
- * Asks the Agent to probe both backends (the Agent runs server-side
- * and has the actual URLs from config.ini — the browser may not be
- * able to reach the backends directly due to CORS or networking).
+ * Check LLM backend health via GET /api/llm/health.
+ *
+ * The Agent returns per-backend health status (online/degraded/offline)
+ * and a `changed` flag. If the Agent's LLM config was modified,
+ * STe updates its stored config and refreshes the display.
+ *
+ * Response format:
+ * {
+ *   "changed": false,
+ *   "rp_llm": { "url": "...", "template": "...", "health": "online" },
+ *   "instruct_llm": { "backends": [{ "url": "...", "health": "online" }, ...] }
+ * }
  */
-async function checkLlmStatuses() {
+async function checkLlmHealth() {
     const origin = getAgentOrigin();
     if (!origin) return;
 
     if (isBypassMode()) {
-        console.log(`[${EXTENSION_NAME}] [BYPASS] LLM status check skipped`);
+        console.log(`[${EXTENSION_NAME}] [BYPASS] LLM health check skipped`);
         return;
     }
 
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-        const resp = await fetch(`${origin}/api/dashboard/status`, {
+        const resp = await fetch(`${origin}/api/llm/health`, {
             method: 'GET',
             signal: controller.signal,
         });
         clearTimeout(timeoutId);
 
         if (!resp.ok) return;
-        const status = await resp.json();
+        const data = await resp.json();
 
-        // RP LLM
-        const rpDot = $('#ass-rp-dot');
-        if (rpDot.length) {
-            rpDot.removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
-            if (status.rp_llm_disabled) {
-                rpDot.addClass('ass-llm-dot-off');
-                rpDot.attr('title', 'RP LLM: disabled (config.ini)');
-            } else if (status.rp_llm_connected) {
-                rpDot.addClass('ass-llm-dot-green');
-                rpDot.attr('title', 'RP LLM: online (via Agent)');
-            } else {
-                rpDot.addClass('ass-llm-dot-red');
-                rpDot.attr('title', 'RP LLM: offline (via Agent)');
-            }
+        // Store LLM config from the health response (always includes URLs + health)
+        storeLlmConfig(data);
+
+        // If Agent config changed, refresh the full config and display.
+        // The health endpoint already returns URLs, so storeLlmConfig()
+        // handles the update. The `changed` flag is for informational logging.
+        if (data.changed) {
+            console.log(`[${EXTENSION_NAME}] Agent LLM config changed — updating local state.`);
+            // Also fetch full config to ensure we have everything (e.g. config_version)
+            fetchLlmConfig();
         }
 
-        // Instruct LLM backends — update all per-backend dots
-        // The Agent currently returns a single instruct_llm status;
-        // apply it to all instruct backend dots until per-backend
-        // status is supported by the Agent API.
-        $('.ass-instruct-dot').each(function () {
-            $(this).removeClass('ass-llm-dot-green ass-llm-dot-red ass-llm-dot-off');
-            if (status.instruct_llm_disabled) {
-                $(this).addClass('ass-llm-dot-off');
-                $(this).attr('title', 'Instruct LLM: disabled (config.ini)');
-            } else if (status.instruct_llm_connected) {
-                $(this).addClass('ass-llm-dot-green');
-                $(this).attr('title', 'Instruct LLM: online (via Agent)');
-            } else {
-                $(this).addClass('ass-llm-dot-red');
-                $(this).attr('title', 'Instruct LLM: offline (via Agent)');
-            }
-        });
+        // Update the read-only LLM displays with new health data
+        updateLlmDisplay();
     } catch (e) {
         // Silent — will retry on next health check cycle
-        console.debug(`[${EXTENSION_NAME}] LLM status check via Agent failed:`, e.message);
+        console.debug(`[${EXTENSION_NAME}] LLM health check failed:`, e.message);
     }
 }
 
 /**
- * POST /api/ping - lights the "ST Extension" indicator on the dashboard.
+ * POST /api/ping - lights the "ST Extension" indicator on the Agent dashboard.
+ * Now sends config_version so the Agent can tell STe if its config changed.
  */
 async function pingAgent(healthUrl) {
     const origin = getAgentOrigin();
     if (!origin) return;
     if (isBypassMode()) return;
+
     try {
-        await fetch(`${origin}/api/ping`, { method: 'POST' });
+        const body = {};
+        if (state.configVersion !== null) {
+            body.config_version = state.configVersion;
+        }
+
+        const resp = await fetch(`${origin}/api/ping`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined,
+        });
+
+        // If the Agent says config changed, fetch the new LLM config.
+        if (resp.ok) {
+            try {
+                const data = await resp.json();
+                if (data && data.config_changed) {
+                    console.log(`[${EXTENSION_NAME}] Ping reports config changed — fetching LLM config.`);
+                    fetchLlmConfig();
+                }
+            } catch (e) {
+                // Ping response may not include config_changed — that's OK
+            }
+        }
     } catch (e) {
         // Silent - best-effort
     }
@@ -234,6 +396,10 @@ async function pingAgent(healthUrl) {
  */
 export function startHealthChecks() {
     stopHealthChecks();
+
+    // On first start, fetch LLM config from the Agent
+    fetchLlmConfig();
+
     checkAgentHealth();
     state.healthCheckTimer = setInterval(() => {
         checkAgentHealth();
@@ -293,6 +459,9 @@ export async function handleReconnect() {
         const healthy = await checkAgentHealth();
 
         if (healthy) {
+            // Fetch the Agent's LLM config on reconnect
+            await fetchLlmConfig();
+
             state.configSynced = false;
             await syncConfigToAgent(settings, getAgentOrigin());
             toastr.success('Reconnected to Agent!', 'Agent-StateSync');
@@ -328,3 +497,13 @@ export function refreshAgentUrlDisplay() {
         $text.css('color', '#d9534f');
     }
 }
+
+// #############################################
+// # Event Listeners
+// #############################################
+
+// When settings.js stores LLM config from POST /api/config response,
+// it dispatches 'ass-llm-config-changed'. Listen here to update the display.
+window.addEventListener('ass-llm-config-changed', () => {
+    updateLlmDisplay();
+});

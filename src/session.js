@@ -11,14 +11,14 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.4.0
+// File Version: 1.5.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
-    getSettings, isBypassMode, syncConfigToAgent, updateStatus,
+    getSettings, isBypassMode, syncConfigToAgent, storeLlmConfig, updateStatus,
 } from './settings.js';
-import { getAgentOrigin } from './agent-url.js';
+import { getAgentOrigin, fetchLlmConfig } from './agent-url.js';
 import { loadGroupData } from './groups.js';
 import { buildInitPayload } from './init-payload.js';
 import { startNotificationPolling } from './notifications.js';
@@ -203,13 +203,16 @@ async function attachToExistingSession(origin, sessionId) {
         state.configSynced = false;
         await syncConfigToAgent(getSettings(), origin);
 
+        // Fetch the Agent's LLM config (may have changed since last connection)
+        await fetchLlmConfig();
+
         const shortId = sessionId.substring(0, 8);
         const chatLabel = state.isGroupChat && state.activeGroup
             ? `Group "${state.activeGroup.name}"`
             : `"${state.context.name2 || 'Unknown'}"`;
         toastr.success(`Resumed session (${shortId}...) for ${chatLabel}`, 'Agent-StateSync');
         updateStatus(`Session ${shortId}...`, '#5cb85c');
-                startNotificationPolling();
+        startNotificationPolling();
     } catch (err) {
         console.error(`[${EXTENSION_NAME}] Session attach failed:`, err);
         toastr.error(`Session attach failed: ${err.message}`, 'Agent-StateSync');
@@ -261,6 +264,9 @@ async function showNewChatConfirm(origin, chatId) {
 /**
  * Create a new Agent session linked to the current ST chat ID,
  * then initialize it with character/group data.
+ *
+ * The Agent's response now includes its LLM config (rp_llm and instruct_llm),
+ * which STe stores for display purposes.
  */
 async function createAndInitSession(origin, chatId) {
     try {
@@ -280,6 +286,14 @@ async function createAndInitSession(origin, chatId) {
         const sessionId = data.session_id;
         console.log(`[${EXTENSION_NAME}] Created session ${sessionId} for chat ${chatId}`);
 
+        // Parse LLM config from the Agent's session creation response.
+        // The Agent includes rp_llm and instruct_llm so STe can display
+        // the LLM configuration immediately without an extra round-trip.
+        if (data.rp_llm || data.instruct_llm) {
+            storeLlmConfig(data);
+            console.log(`[${EXTENSION_NAME}] LLM config received from session creation response.`);
+        }
+
         // Save to metadata
         state.context.chatMetadata = state.context.chatMetadata || {};
         state.context.chatMetadata[META_KEY_SESSION] = sessionId;
@@ -296,7 +310,7 @@ async function createAndInitSession(origin, chatId) {
         const shortId = sessionId.substring(0, 8);
         toastr.success(`Session created: ${shortId}...`, 'Agent-StateSync');
         updateStatus(`Session ${shortId}...`, '#5cb85c');
-                startNotificationPolling();
+        startNotificationPolling();
     } catch (err) {
         console.error(`[${EXTENSION_NAME}] Proactive session creation failed:`, err);
         toastr.error(`Session creation failed: ${err.message}`, 'Agent-StateSync');
@@ -360,6 +374,11 @@ export async function ensureSession(backendOrigin) {
         const sessionId = data.session_id;
         console.log(`[${EXTENSION_NAME}] Fallback session created: ${sessionId}`);
 
+        // Parse LLM config from the response
+        if (data.rp_llm || data.instruct_llm) {
+            storeLlmConfig(data);
+        }
+
         state.context.chatMetadata = state.context.chatMetadata || {};
         state.context.chatMetadata[META_KEY_SESSION] = sessionId;
         state.context.chatMetadata[META_KEY_COUNTER] = 0;
@@ -400,6 +419,9 @@ export async function manualInitSession() {
         // Sync config
         state.configSynced = false;
         await syncConfigToAgent(getSettings(), origin);
+
+        // Fetch the Agent's LLM config
+        await fetchLlmConfig();
 
         // Start notification polling
         startNotificationPolling();
