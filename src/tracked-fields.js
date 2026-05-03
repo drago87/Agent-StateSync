@@ -99,11 +99,19 @@ async function loadDefaultCategory(category) {
 /**
  * Load tracked fields: user customizations from ST settings,
  * falling back to defaults from external JSON files.
+ * If saved data exists but all categories are empty, loads defaults instead.
  */
 async function loadTrackedFields() {
     const saved = state.context.extensionSettings?.[TRACKED_FIELDS_KEY];
     if (saved && typeof saved === 'object') {
-        return saved;
+        // Check if saved data has any actual field definitions.
+        // If all categories are empty objects, fall through to defaults.
+        const categories = ['character', 'scenario', 'shared'];
+        const hasContent = categories.some(cat => {
+            const catData = saved[cat];
+            return catData && typeof catData === 'object' && Object.keys(catData).length > 0;
+        });
+        if (hasContent) return saved;
     }
     // Load defaults from JSON files
     return await loadDefaultFields();
@@ -368,14 +376,27 @@ function readFieldFromDOM($el) {
 // # Render All
 // #############################################
 
+/**
+ * Snapshot which <details> categories are currently open
+ * so we can restore their state after re-rendering.
+ */
+function getOpenCategories($container) {
+    const open = {};
+    $container.find('.ass-tf-category').each(function () {
+        const key = $(this).find('.ass-tf-add-field').attr('data-category');
+        if (key && this.open) open[key] = true;
+    });
+    return open;
+}
+
 function renderAllCategories($container) {
-    // Flush all pending DOM edits into currentFields before re-rendering.
-    syncFieldsFromDOM();
+    // Capture which categories are currently open before re-rendering.
+    const openCategories = getOpenCategories($container);
 
     const categories = [
-        { key: 'character', label: 'Character', open: false, allowSecret: true },
-        { key: 'scenario',  label: 'Scenario',  open: false, allowSecret: false },
-        { key: 'shared',    label: 'Shared',    open: false, allowSecret: false },
+        { key: 'character', label: 'Character', open: !!openCategories['character'], allowSecret: true },
+        { key: 'scenario',  label: 'Scenario',  open: !!openCategories['scenario'],  allowSecret: false },
+        { key: 'shared',    label: 'Shared',    open: !!openCategories['shared'],    allowSecret: false },
     ];
 
     $container.empty();
@@ -403,7 +424,12 @@ function addField(category) {
 async function loadDefaults(category) {
     const defaults = await loadDefaultCategory(category);
     currentFields[category] = defaults;
-    renderAllCategories($('#ass-tracked-fields-container'));
+    // Ensure the category we just loaded is open in the re-render
+    const $container = $('#ass-tracked-fields-container');
+    // Temporarily mark it open so renderAllCategories picks it up
+    $container.find(`.ass-tf-add-field[data-category="${category}"]`)
+        .closest('.ass-tf-category').attr('open', '');
+    renderAllCategories($container);
     scheduleSave();
     console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
 }
@@ -514,14 +540,21 @@ function findField(parentObj, key) {
 function bindEvents($container) {
     $container.off('.ass-tf');
 
-    // Input changes
+    // Prevent button clicks inside <details> from toggling the details closed.
+    // Without this, clicking "Add field" / "Load Defaults" etc. would close
+    // the <details> as a side-effect of the browser's default toggle behavior.
+    $container.on('click.ass-tf', '.ass-tf-category button', function (e) {
+        e.preventDefault();
+    });
+
+    // Input changes — sync DOM → currentFields immediately for live saves
     $container.on('input.ass-tf', '.ass-tf-name, .ass-tf-hint, .ass-tf-desc, .ass-tf-type, ' +
         '.ass-tf-sub-name, .ass-tf-sub-type, .ass-tf-sub-hint', function () {
         syncFieldsFromDOM();
         scheduleSave();
     });
 
-    // Checkbox changes
+    // Checkbox changes — sync DOM → currentFields immediately for live saves
     $container.on('change.ass-tf', '.ass-tf-extends, .ass-tf-dynamic, .ass-tf-secret', function () {
         syncFieldsFromDOM();
         scheduleSave();
@@ -684,5 +717,15 @@ export async function initTrackedFieldsUI() {
     if (!$container.length) return;
 
     renderAllCategories($container);
+
+    // On first render, auto-open categories that have fields
+    $container.find('.ass-tf-category').each(function () {
+        const $cat = $(this);
+        const hasFields = $cat.find('.ass-tf-field').length > 0;
+        if (hasFields) {
+            this.open = true;
+        }
+    });
+
     bindEvents($container);
 }
