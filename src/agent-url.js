@@ -5,10 +5,10 @@
 // and reconnect logic.
 //
 // LLM config is managed by the Agent. STe displays it read-only
-// via fetchLlmConfig() which calls GET /api/status, and updates
+// via fetchLlmConfig() which calls GET /api/backends/health, and updates
 // state.agentLlmConfig + the read-only UI displays.
 //
-// Agent /api/status response format:
+// Agent /api/backends/health response format:
 // {
 //   "last_changed": "2026-05-02@23h-54m-56s-787ms",
 //   "rp_llm": { "alias": "localhost:5001", "health": "Healthy" },
@@ -124,7 +124,7 @@ function getHealthLabel(health) {
 }
 
 /**
- * Fetch LLM config and health from Agent via GET /api/status.
+ * Fetch LLM config and health from Agent via GET /api/backends/health.
  * Stores result in state.agentLlmConfig and updates the read-only display.
  * Called on first connect, reconnect, and when config changes are detected.
  */
@@ -140,28 +140,28 @@ export async function fetchLlmConfig() {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-        const resp = await fetch(`${origin}/api/status`, {
+        const resp = await fetch(`${origin}/api/backends/health`, {
             method: 'GET',
             signal: controller.signal,
         });
         clearTimeout(timeoutId);
 
         if (!resp.ok) {
-            console.warn(`[${EXTENSION_NAME}] /api/status returned ${resp.status}`);
+            console.warn(`[${EXTENSION_NAME}] /api/backends/health returned ${resp.status}`);
             return;
         }
 
         const data = await resp.json().catch(() => {
-            console.warn(`[${EXTENSION_NAME}] /api/status returned non-JSON body`);
+            console.warn(`[${EXTENSION_NAME}] /api/backends/health returned non-JSON body`);
             return null;
         });
         if (!data) return;
         storeLlmConfig(data);
         // storeLlmConfig() dispatches 'ass-llm-config-changed' which
         // triggers updateLlmDisplay() via the event listener below.
-        console.log(`[${EXTENSION_NAME}] LLM config fetched from /api/status:`, state.agentLlmConfig);
+        console.log(`[${EXTENSION_NAME}] LLM config fetched from /api/backends/health:`, state.agentLlmConfig);
     } catch (e) {
-        console.debug(`[${EXTENSION_NAME}] /api/status fetch failed:`, e.message);
+        console.debug(`[${EXTENSION_NAME}] /api/backends/health fetch failed:`, e.message);
     }
 }
 
@@ -261,7 +261,7 @@ function getHealthCheckUrl() {
 
 /**
  * Ping the Agent's /health endpoint.
- * On success, also fetches LLM status from /api/status.
+ * On success, also fetches LLM status from /api/backends/health.
  */
 export async function checkAgentHealth() {
     const url = getHealthCheckUrl();
@@ -291,7 +291,7 @@ export async function checkAgentHealth() {
             // Ping the dashboard so the ST Extension light stays green
             pingAgent(url);
 
-            // Fetch LLM backend status via /api/status
+            // Fetch LLM backend status via /api/backends/health
             // (fire-and-forget, don't block health check)
             fetchLlmConfig();
 
@@ -476,7 +476,7 @@ export function refreshAgentUrlDisplay() {
 // # Event Listeners
 // #############################################
 
-// When settings.js stores LLM config (from /api/status or session responses),
+// When settings.js stores LLM config (from /api/backends/health or session responses),
 // it dispatches 'ass-llm-config-changed'. Listen here to update the display.
 window.addEventListener('ass-llm-config-changed', () => {
     updateLlmDisplay();

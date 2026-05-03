@@ -3,7 +3,7 @@
 // Single source of truth for all mutable state shared across modules.
 // All modules import this object and read/write its properties.
 // Since it's an object reference, mutations are visible everywhere.
-// File Version: 1.1.0
+// File Version: 1.2.0
 
 const state = {
     // SillyTavern context (set once during init)
@@ -39,16 +39,24 @@ const state = {
     lastInterceptLog: null,
 
     // Runtime LLM config from Agent (not persisted in ST settings).
-    // Updated via GET /api/config/ste, GET /api/llm/health, POST /api/config.
-    // Health values: "online" | "degraded" | "offline" | "unknown"
+    // Updated via GET /api/backends/health.
+    //
+    // Health values from Agent: "Healthy" | "unknown" | "Unhealthy" | "Disabled"
+    //   - "Healthy":   LLM is online and responding
+    //   - "unknown":   LLM enabled but not running, or connection refused/timeout
+    //   - "Unhealthy": HTTP error (e.g. 500) — server reachable but broken
+    //   - "Disabled":  LLM disabled in Agent config
+    //
+    // alias: user-friendly name or IP:port (show as-is)
     agentLlmConfig: {
-        rp_llm: { url: '', health: 'unknown', template: '' },
-        instruct_llm: { backends: [] },
+        rp_llm: { alias: '', health: 'unknown' },
+        instruct_backends: [],   // array of { alias: '', health: 'unknown' }
     },
 
-    // Config version counter — sent in POST /api/ping so the Agent can
-    // tell STe whether its config has changed since the last check.
-    configVersion: null,
+    // Timestamp of the last change to LLM backends on the Agent side.
+    // Used to detect config changes between health checks.
+    // Format: "2026-05-02@23h-54m-56s-787ms"
+    lastChanged: null,
 };
 
 export default state;

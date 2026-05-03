@@ -4,9 +4,9 @@
 // and small utility functions (hashing, status text, debug output).
 //
 // LLM settings (URLs, templates, backends) are now managed by the Agent.
-// STe only sends non-LLM settings via POST /api/config and receives
-// the Agent's LLM config in the response.
-// File Version: 2.0.0
+// STe only sends non-LLM settings via POST /api/config.
+// LLM health and config are fetched from GET /api/backends/health.
+// File Version: 2.1.0
 
 import state from './state.js';
 import defaultConfig from './default-config.js';
@@ -25,14 +25,6 @@ export const PROMPT_SETTINGS_KEY = 'agent_statesync_prompt_settings';
 // Key used to store character config data inside the character card's
 // data.extensions object.  Persists with the card on export/import.
 export const CHAR_CONFIG_EXT_KEY = 'agent_statesync';
-
-export const TEMPLATE_OPTIONS = [
-    { value: 'chatml', label: 'ChatML' },
-    { value: 'llama3', label: 'Llama 3' },
-    { value: 'alpaca', label: 'Alpaca' },
-    { value: 'mistral', label: 'Mistral' },
-    { value: 'raw', label: 'Raw (None)' },
-];
 
 export const THINKING_OPTIONS = [
     { value: 0, label: '0 (Disabled)' },
@@ -56,8 +48,7 @@ export const HISTORY_OPTIONS = [
 export const HEALTH_CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
 export const HEALTH_CHECK_TIMEOUT_MS = 5000;   // 5 second timeout per check
 
-// LLM settings (rpLlmUrl, instructLlmBackends, rpTemplate, instructTemplate)
-// have been moved to the Agent side. STe only stores non-LLM settings.
+// LLM settings have been moved to the Agent side. STe only stores non-LLM settings.
 export const defaultSettings = {
     enabled: false,
     bypassMode: false,          // When true, don't connect to Agent — return dummy responses
@@ -149,37 +140,47 @@ export function saveSettings(settings) {
 }
 
 /**
- * Store LLM config from Agent into state and notify listeners.
- * Called from syncConfigToAgent() and session.js when the Agent
- * returns LLM config in its response.
+ * Store LLM config from Agent's /api/backends/health response into state.
+ * Dispatches 'ass-llm-config-changed' so agent-url.js can update the display.
  *
- * @param {object} data - Object with rp_llm and/or instruct_llm
+ * Expected /api/backends/health response format:
+ * {
+ *   "last_changed": "2026-05-02@23h-54m-56s-787ms",
+ *   "rp_llm": { "alias": "localhost:5001", "health": "Healthy" },
+ *   "instruct_backends": [
+ *     { "alias": "PC", "health": "Healthy" },
+ *     { "alias": "192.168.0.51:5000", "health": "unknown" }
+ *   ]
+ * }
+ *
+ * Health values: "Healthy" | "unknown" | "Unhealthy" | "Disabled"
  */
 export function storeLlmConfig(data) {
     let changed = false;
 
     if (data.rp_llm) {
         state.agentLlmConfig.rp_llm = {
-            url: data.rp_llm.url || '',
+            alias: data.rp_llm.alias || '',
             health: data.rp_llm.health || 'unknown',
-            template: data.rp_llm.template || '',
         };
         changed = true;
     }
-    if (data.instruct_llm) {
-        state.agentLlmConfig.instruct_llm = {
-            backends: Array.isArray(data.instruct_llm.backends)
-                ? data.instruct_llm.backends.map(b => ({
-                    url: b.url || '',
-                    health: b.health || 'unknown',
-                }))
-                : [],
-        };
+    if (Array.isArray(data.instruct_backends)) {
+        state.agentLlmConfig.instruct_backends = data.instruct_backends.map(b => ({
+            alias: b.alias || '',
+            health: b.health || 'unknown',
+        }));
         changed = true;
     }
-    // Track config version if provided
-    if (data.config_version !== undefined) {
-        state.configVersion = data.config_version;
+
+    // Track last_changed timestamp
+    if (data.last_changed !== undefined) {
+        const prevChanged = state.lastChanged;
+        state.lastChanged = data.last_changed;
+        // If the timestamp changed, config was updated on the Agent side
+        if (prevChanged !== null && prevChanged !== data.last_changed) {
+            console.log(`[${EXTENSION_NAME}] Agent LLM config changed at ${data.last_changed}`);
+        }
     }
 
     if (changed) {
@@ -191,8 +192,24 @@ export function storeLlmConfig(data) {
 }
 
 /**
+ * Check if the RP LLM is healthy enough to generate messages.
+ * RP LLM must be "Healthy" for message generation.
+ */
+export function isRpLlmHealthy() {
+    return state.agentLlmConfig.rp_llm.health === 'Healthy';
+}
+
+/**
+ * Check if at least one instruct backend is healthy.
+ * At least one instruct backend must be "Healthy" to do init.
+ */
+export function hasHealthyInstructBackend() {
+    return state.agentLlmConfig.instruct_backends.some(b => b.health === 'Healthy');
+}
+
+/**
  * Push non-LLM settings to the Agent.
- * The Agent responds with its LLM config for STe to apply.
+ * The Agent may respond with its LLM config for STe to apply.
  *
  * @param {object} settings - The current settings object
  * @param {string|null} originOverride - Agent origin URL (optional)
@@ -226,8 +243,7 @@ export async function syncConfigToAgent(settings, originOverride) {
         return;
     }
 
-    // STe now only sends non-LLM settings.
-    // LLM URLs, templates, and backends are managed by the Agent.
+    // STe only sends non-LLM settings.
     const configPayload = {
         thinking_steps: settings.thinkingSteps,
         refinement_steps: settings.refinementSteps,
@@ -244,15 +260,14 @@ export async function syncConfigToAgent(settings, originOverride) {
             state.configSynced = true;
             console.log(`[${EXTENSION_NAME}] Config synced to Agent.`, Object.keys(configPayload));
 
-            // The Agent responds with its LLM config — parse and store it.
+            // The Agent may respond with LLM config — parse and store it.
             try {
                 const data = await resp.json();
-                if (data && (data.rp_llm || data.instruct_llm)) {
+                if (data && (data.rp_llm || data.instruct_backends)) {
                     storeLlmConfig(data);
-                    console.log(`[${EXTENSION_NAME}] LLM config received from Agent response.`);
                 }
             } catch (e) {
-                // Response may not include LLM config (older Agent version) — that's OK
+                // Response may not include LLM config — that's OK
             }
         } else {
             console.warn(`[${EXTENSION_NAME}] Agent config sync returned ${resp.status}. Will retry.`);

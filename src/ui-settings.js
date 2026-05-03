@@ -4,7 +4,7 @@
 //
 // LLM settings are now managed by the Agent. They are displayed as
 // read-only fields (like the Agent URL) and updated from state.agentLlmConfig
-// which is populated by GET /api/status.
+// which is populated by GET /api/backends/health.
 //
 // alias values are shown as-is (user-friendly name or IP:port).
 // Health dots use Agent's values: "Healthy" | "unknown" | "Unhealthy" | "Disabled"
