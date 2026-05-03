@@ -2,13 +2,13 @@
 //
 // Settings panel HTML/CSS, event bindings, and all change handlers.
 //
-// LLM settings (RP LLM URL, Instruct LLM Backends, Templates) are now
-// managed by the Agent. They are displayed as read-only fields (like
-// the Agent URL) and updated from state.agentLlmConfig.
+// LLM settings are now managed by the Agent. They are displayed as
+// read-only fields (like the Agent URL) and updated from state.agentLlmConfig
+// which is populated by GET /api/status.
 //
-// Extracted from ui.js to keep the settings UI separate from
-// the initialization orchestrator and button injection logic.
-// File Version: 2.0.0
+// alias values are shown as-is (user-friendly name or IP:port).
+// Health dots use Agent's values: "Healthy" | "unknown" | "Unhealthy" | "Disabled"
+// File Version: 2.1.0
 
 import state from './state.js';
 import {
@@ -140,31 +140,25 @@ export function injectCustomCSS() {
             flex-shrink: 0;
             transition: background-color 0.3s, box-shadow 0.3s;
         }
+        /* Healthy - green */
         .ass-llm-dot-green {
             background-color: #5cb85c;
             box-shadow: 0 0 4px 1px rgba(92, 184, 92, 0.5);
         }
+        /* unknown - yellow (LLM enabled but not running / unreachable) */
         .ass-llm-dot-yellow {
             background-color: #f0ad4e;
             box-shadow: 0 0 4px 1px rgba(240, 173, 78, 0.5);
         }
+        /* Unhealthy - red (server error) */
         .ass-llm-dot-red {
             background-color: #d9534f;
             box-shadow: 0 0 4px 1px rgba(217, 83, 79, 0.4);
         }
+        /* Disabled / off - gray */
         .ass-llm-dot-off {
             background-color: #555;
             box-shadow: none;
-        }
-
-        /* LLM config label (e.g. template name) */
-        .ass-llm-label {
-            font-size: 11px;
-            padding: 1px 6px;
-            border-radius: 3px;
-            background: rgba(128, 128, 128, 0.2);
-            color: var(--fg_dim);
-            white-space: nowrap;
         }
 
         /* Init Session button (rocket icon in chat controls) */
@@ -239,15 +233,14 @@ export function renderSettingsUI() {
                 <!-- RP LLM (read-only, from Agent) -->
                 <div class="margin-bot-10">
                     <label class="title_restorable">
-                        <small><b>RP LLM IP:Port</b> <i>(from Agent)</i></small>
+                        <small><b>RP LLM</b> <i>(from Agent)</i></small>
                     </label>
                     <div class="ass-url-display" id="ass-rp-llm-display">
                         <span id="ass-rp-dot" class="ass-llm-dot ass-llm-dot-off" title="RP LLM: not checked"></span>
                         <i class="fa-solid fa-pen-fancy" style="opacity:0.5;"></i>
                         <span class="ass-url-value" id="ass-rp-llm-text">Waiting for Agent...</span>
-                        <span class="ass-llm-label" id="ass-rp-llm-template" style="display:none;"></span>
                     </div>
-                    <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoint. Configured on the Agent side.</small>
+                    <small>Configured on the Agent side. Must be Healthy to generate messages.</small>
                 </div>
 
                 <!-- Instruct LLM Backends (read-only, dynamic from Agent) -->
@@ -263,7 +256,7 @@ export function renderSettingsUI() {
                             <span class="ass-url-value" style="color:#d9534f;">Waiting for Agent...</span>
                         </div>
                     </div>
-                    <small>Ollama, Koboldcpp, or any OpenAI-compatible endpoints. The Agent will load-balance across available backends.</small>
+                    <small>At least one must be Healthy to initialize a session. The Agent load-balances across available backends.</small>
                 </div>
 
                 <hr class="sysHR">

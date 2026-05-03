@@ -11,12 +11,17 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
-// File Version: 1.5.0
+//
+// Health guards:
+//   - At least one Instruct backend must be "Healthy" to init a session
+//   - RP LLM must be "Healthy" for message generation
+// File Version: 1.6.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
-    getSettings, isBypassMode, syncConfigToAgent, storeLlmConfig, updateStatus,
+    getSettings, isBypassMode, syncConfigToAgent, storeLlmConfig,
+    isRpLlmHealthy, hasHealthyInstructBackend, updateStatus,
 } from './settings.js';
 import { getAgentOrigin, fetchLlmConfig } from './agent-url.js';
 import { loadGroupData } from './groups.js';
@@ -54,11 +59,6 @@ export async function proactiveChatChanged() {
 
     try {
         // Step 1: Get the chat ID first (with retries if needed).
-        // We MUST have a valid chatId before loading group data,
-        // because findActiveGroup() uses getCurrentChatId() to match
-        // the correct group.  On F5 refresh, the chat ID isn't available
-        // immediately — if we load groups too early, the fallback
-        // heuristic grabs the wrong group.
         updateStatus('Loading chat data...', '#5bc0de');
 
         const chatId = typeof state.context.getCurrentChatId === 'function'
@@ -98,8 +98,6 @@ export async function proactiveChatChanged() {
 async function proactiveChatChangedWithId(origin, chatId) {
     try {
         // --- Load group data NOW that we have a valid chatId ---
-        // This must happen before any Agent communication so that
-        // findActiveGroup() can use getCurrentChatId() correctly.
         try {
             await loadGroupData();
         } catch (e) {
@@ -229,6 +227,18 @@ async function showNewChatConfirm(origin, chatId) {
         ? `Group "${state.activeGroup.name}" (${state.activeGroupCharacters.length} members)`
         : `Character "${state.context.name2 || 'Unknown'}"`;
 
+    // Check LLM health and add warnings
+    const rpHealthy = isRpLlmHealthy();
+    const instructHealthy = hasHealthyInstructBackend();
+
+    let warningHtml = '';
+    if (!instructHealthy) {
+        warningHtml += `<p style="margin:0 0 8px 0; color:#f0ad4e;"><i class="fa-solid fa-triangle-exclamation"></i> No healthy Instruct backend — session init will not work until at least one is Healthy.</p>`;
+    }
+    if (!rpHealthy) {
+        warningHtml += `<p style="margin:0 0 8px 0; color:#f0ad4e;"><i class="fa-solid fa-triangle-exclamation"></i> RP LLM is not Healthy — message generation will not work.</p>`;
+    }
+
     const popupHtml = `
         <div style="text-align:center; padding:8px 0;">
             <h3 style="margin:0 0 8px 0;">
@@ -237,6 +247,7 @@ async function showNewChatConfirm(origin, chatId) {
             </h3>
             <p style="margin:0 0 4px 0;"><b>New chat detected:</b></p>
             <p style="margin:0 0 12px 0; color:var(--fg_dim);">${chatLabel}</p>
+            ${warningHtml}
             <p style="margin:0 0 12px 0;">Remember to initialize the chat before starting to chat.</p>
             <p style="margin:0 0 12px 0; font-size:11px; color:var(--fg_dim);">
                 Press the Rocket button to initialize the chat with the Agent with this chat's character/group data.
@@ -265,7 +276,7 @@ async function showNewChatConfirm(origin, chatId) {
  * Create a new Agent session linked to the current ST chat ID,
  * then initialize it with character/group data.
  *
- * The Agent's response now includes its LLM config (rp_llm and instruct_llm),
+ * The Agent's response may include LLM config (rp_llm and instruct_backends),
  * which STe stores for display purposes.
  */
 async function createAndInitSession(origin, chatId) {
@@ -286,10 +297,8 @@ async function createAndInitSession(origin, chatId) {
         const sessionId = data.session_id;
         console.log(`[${EXTENSION_NAME}] Created session ${sessionId} for chat ${chatId}`);
 
-        // Parse LLM config from the Agent's session creation response.
-        // The Agent includes rp_llm and instruct_llm so STe can display
-        // the LLM configuration immediately without an extra round-trip.
-        if (data.rp_llm || data.instruct_llm) {
+        // Parse LLM config from the Agent's session creation response if included.
+        if (data.rp_llm || data.instruct_backends) {
             storeLlmConfig(data);
             console.log(`[${EXTENSION_NAME}] LLM config received from session creation response.`);
         }
@@ -375,7 +384,7 @@ export async function ensureSession(backendOrigin) {
         console.log(`[${EXTENSION_NAME}] Fallback session created: ${sessionId}`);
 
         // Parse LLM config from the response
-        if (data.rp_llm || data.instruct_llm) {
+        if (data.rp_llm || data.instruct_backends) {
             storeLlmConfig(data);
         }
 
@@ -396,6 +405,12 @@ export async function ensureSession(backendOrigin) {
 /**
  * Manual init — called when user clicks the Init button (rocket).
  * Creates a session if needed, initializes it, and starts polling.
+ *
+ * Health guards:
+ *   - At least one Instruct backend must be "Healthy" to init (hard block).
+ *   - If RP LLM is not "Healthy", warns the user (init still proceeds
+ *     since session setup doesn't require the RP LLM).
+ *
  * @returns {boolean} true if successful
  */
 export async function manualInitSession() {
@@ -403,6 +418,24 @@ export async function manualInitSession() {
     if (!origin) {
         toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
         return false;
+    }
+
+    // --- Check Instruct backend health ---
+    if (!hasHealthyInstructBackend()) {
+        toastr.error(
+            'No healthy Instruct LLM backend. Session init requires at least one Healthy backend.',
+            'Agent-StateSync'
+        );
+        return false;
+    }
+
+    // --- Check RP LLM health ---
+    if (!isRpLlmHealthy()) {
+        const rpHealth = state.agentLlmConfig.rp_llm.health;
+        toastr.warning(
+            `RP LLM is ${rpHealth || 'not responding'}. Message generation will not work until it is Healthy.`,
+            'Agent-StateSync'
+        );
     }
 
     try {

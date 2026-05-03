@@ -4,14 +4,14 @@
 // injected buttons (ui-buttons), chat event hooks, and the main init()
 // entry point.  Keeps the initialization flow in one place while
 // delegating rendering to focused modules.
-// File Version: 2.1.0
+// File Version: 2.2.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, SETTINGS_KEY,
     defaultSettings, getSettings,
 } from './settings.js';
-import { getAgentOrigin, refreshAgentUrlDisplay, startHealthChecks, fetchLlmConfig } from './agent-url.js';
+import { getAgentOrigin, refreshAgentUrlDisplay, startHealthChecks } from './agent-url.js';
 import { proactiveChatChanged } from './session.js';
 import { interceptFetch } from './pipeline.js';
 import { initCharConfig } from './char-config.js';
@@ -193,9 +193,6 @@ export function init(debug = false) {
                 try {
                     await proactiveChatChanged();
                     updateInitButtonVisibility();
-
-                    // Fetch the Agent's LLM config for display
-                    await fetchLlmConfig();
                 } catch (e) {
                     console.warn(`[${EXTENSION_NAME}] Initial proactive setup failed:`, e.message);
                 }

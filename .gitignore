@@ -11,6 +11,7 @@
 # production
 /build
 build.bat
+*.zip
 
 # misc
 .DS_Store
