@@ -306,12 +306,11 @@ export function renderSettingsUI() {
 
                 <hr class="sysHR">
 
-                <!-- Tracked Fields Editor -->
+                <!-- Tracked Fields Editor — opens in a separate modal -->
                 <div class="margin-bot-10">
-                    <label class="title_restorable">
-                        <small><b>Database Tracked Fields</b></small>
-                    </label>
-                    <div id="ass-tracked-fields-container"></div>
+                    <button id="ass-tf-open-btn" class="menu_button" type="button">
+                        <i class="fa-solid fa-database"></i> Database Tracked Fields
+                    </button>
                 </div>
 
                 <hr class="sysHR">

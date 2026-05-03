@@ -13,7 +13,12 @@
 //
 // User edits are saved to ST extensionSettings.
 // The merged data is included in the session init payload.
-// File Version: 2.0.0
+//
+// The editor opens in a wide overlay modal (not inline in the settings
+// panel) so that the field rows have enough horizontal space for
+// all the inputs, checkboxes, and buttons.
+//
+// File Version: 3.0.0
 
 import state from './state.js';
 
@@ -26,6 +31,9 @@ let saveTimeout = null;
 
 // Cached default fields loaded from JSON files
 let defaultFieldsCache = null;
+
+// Which categories are currently expanded (persists across re-renders)
+let openCategories = { character: false, scenario: false, shared: false };
 
 // #############################################
 // # Default Fields Loading
@@ -168,17 +176,24 @@ function buildTypeOptions(selected) {
 function renderCategory({ key, label, open, allowSecret }) {
     const fields = currentFields[key] || {};
     const entries = Object.entries(fields);
+    const fieldCount = entries.length;
 
     let fieldsHtml = '';
     for (const [fieldKey, fieldValue] of entries) {
         fieldsHtml += renderField(key, fieldKey, fieldValue, 0, allowSecret);
     }
 
+    const countBadge = fieldCount > 0
+        ? `<span class="ass-tf-count">${fieldCount}</span>`
+        : '';
+
     return `
-    <details ${open ? 'open' : ''} class="ass-tf-category">
-        <summary><b>${label}</b></summary>
+    <details ${open ? 'open' : ''} class="ass-tf-category" data-category="${key}">
+        <summary class="ass-tf-category-summary">
+            <b>${label}</b> ${countBadge}
+        </summary>
         <div class="ass-tf-fields">${fieldsHtml}</div>
-        <div style="margin-top:6px; display:flex; gap:6px;">
+        <div class="ass-tf-category-actions">
             <button class="menu_button ass-tf-add-field" data-category="${key}">
                 <i class="fa-solid fa-plus"></i> Add field
             </button>
@@ -192,12 +207,6 @@ function renderCategory({ key, label, open, allowSecret }) {
 /**
  * Render a field — either simple or group (with nested sub-fields).
  * Supports arbitrary nesting depth.
- *
- * @param {string} category - "character" | "scenario" | "shared"
- * @param {string} key - Field name
- * @param {object} field - Field definition
- * @param {number} depth - Nesting depth (0 = top-level)
- * @param {boolean} allowSecret - Whether to show secret checkbox
  */
 function renderField(category, key, field, depth, allowSecret) {
     if (isGroup(field)) {
@@ -213,15 +222,13 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
     const secret = field.secret || false;
     const isNested = depth > 0;
 
-    // Build secret checkbox only for character category
     const secretHtml = allowSecret
         ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
                <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
+               <i class="fa-solid fa-eye-slash"></i>
            </label>`
         : '';
 
-    // At top level, show the "convert to group" button
     const addSubBtn = !isNested
         ? `<button class="menu_button ass-tf-add-sub-to-field"
                   title="Add sub-field (converts to group)">
@@ -235,10 +242,10 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
     <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
-                   placeholder="Field name" style="flex:1; min-width:0;">
+                   placeholder="Field name">
             <input class="text_pole ass-tf-hint" value="${escapeAttr(hint)}"
-                   placeholder="Description / Hint" style="flex:3; min-width:0;">
-            <select class="text_pole ass-tf-type" style="flex:0 0 130px;">
+                   placeholder="Description / Hint">
+            <select class="text_pole ass-tf-type">
                 ${buildTypeOptions(type)}
             </select>
             <label class="ass-tf-extends-label" title="Only extends this and will not overwrite">
@@ -259,11 +266,10 @@ function renderGroupField(category, key, field, depth, allowSecret) {
     const fields = field.fields || {};
     const secret = field.secret || false;
 
-    // Build secret checkbox only for character category
     const secretHtml = allowSecret
         ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
                <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
+               <i class="fa-solid fa-eye-slash"></i>
            </label>`
         : '';
 
@@ -276,9 +282,9 @@ function renderGroupField(category, key, field, depth, allowSecret) {
     <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
-                   placeholder="Group name" style="flex:1; min-width:0;">
+                   placeholder="Group name">
             <input class="text_pole ass-tf-desc" value="${escapeAttr(description)}"
-                   placeholder="Description" style="flex:3; min-width:0;">
+                   placeholder="Description">
             <label class="ass-tf-dyn-label" title="Dynamic — entries keyed by name">
                 <input type="checkbox" class="ass-tf-dynamic" ${isDynamic ? 'checked' : ''}>
                 <small>Dyn</small>
@@ -291,7 +297,7 @@ function renderGroupField(category, key, field, depth, allowSecret) {
         <div class="ass-tf-subfields">
             ${subfieldsHtml}
         </div>
-        <div style="margin:4px 0 4px 20px; display:flex; gap:6px;">
+        <div class="ass-tf-group-actions">
             <button class="menu_button ass-tf-add-subfield"
                     data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
                 <i class="fa-solid fa-plus"></i> Add sub-field
@@ -314,13 +320,16 @@ function isGroup(field) {
 
 /**
  * Read all current DOM values and sync them into currentFields.
- * Handles arbitrary nesting depth by walking the DOM tree.
+ * Only called for live input/checkbox changes, NOT during re-renders.
  */
 function syncFieldsFromDOM() {
     const categories = ['character', 'scenario', 'shared'];
+    const $container = $('#ass-tf-modal-fields');
+
+    if (!$container.length) return;
 
     for (const cat of categories) {
-        const $topFields = $(`#ass-tracked-fields-container .ass-tf-field[data-category="${cat}"][data-depth="0"]`);
+        const $topFields = $container.find(`.ass-tf-field[data-category="${cat}"][data-depth="0"]`);
         currentFields[cat] = {};
         $topFields.each(function () {
             const key = String($(this).attr('data-key'));
@@ -342,13 +351,11 @@ function readFieldFromDOM($el) {
             fields: {},
         };
 
-        // Read secret if checkbox exists (character category)
         const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
         if ($secret.length) {
             result.secret = $secret.is(':checked');
         }
 
-        // Read direct child fields (immediate children, not deeper nested)
         $el.children('.ass-tf-subfields').children('.ass-tf-field').each(function () {
             const subKey = String($(this).attr('data-key'));
             if (subKey) result.fields[subKey] = readFieldFromDOM($(this));
@@ -362,7 +369,6 @@ function readFieldFromDOM($el) {
             extends_only: $el.find('> .ass-tf-row > .ass-tf-extends').is(':checked'),
         };
 
-        // Read secret if checkbox exists (character category)
         const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
         if ($secret.length) {
             result.secret = $secret.is(':checked');
@@ -373,30 +379,17 @@ function readFieldFromDOM($el) {
 }
 
 // #############################################
-// # Render All
+// # Render All Categories
 // #############################################
 
-/**
- * Snapshot which <details> categories are currently open
- * so we can restore their state after re-rendering.
- */
-function getOpenCategories($container) {
-    const open = {};
-    $container.find('.ass-tf-category').each(function () {
-        const key = $(this).find('.ass-tf-add-field').attr('data-category');
-        if (key && this.open) open[key] = true;
-    });
-    return open;
-}
-
-function renderAllCategories($container) {
-    // Capture which categories are currently open before re-rendering.
-    const openCategories = getOpenCategories($container);
+function renderAllCategories() {
+    const $container = $('#ass-tf-modal-fields');
+    if (!$container.length) return;
 
     const categories = [
-        { key: 'character', label: 'Character', open: !!openCategories['character'], allowSecret: true },
-        { key: 'scenario',  label: 'Scenario',  open: !!openCategories['scenario'],  allowSecret: false },
-        { key: 'shared',    label: 'Shared',    open: !!openCategories['shared'],    allowSecret: false },
+        { key: 'character', label: 'Character', open: openCategories['character'], allowSecret: true },
+        { key: 'scenario',  label: 'Scenario',  open: openCategories['scenario'],  allowSecret: false },
+        { key: 'shared',    label: 'Shared',    open: openCategories['shared'],    allowSecret: false },
     ];
 
     $container.empty();
@@ -405,11 +398,27 @@ function renderAllCategories($container) {
     }
 }
 
+/**
+ * Snapshot which categories are open before a re-render.
+ */
+function snapshotOpenCategories() {
+    const $container = $('#ass-tf-modal-fields');
+    if (!$container.length) return;
+
+    $container.find('.ass-tf-category').each(function () {
+        const key = $(this).attr('data-category');
+        if (key) openCategories[key] = this.open;
+    });
+}
+
 // #############################################
 // # Edit Handlers
 // #############################################
 
 function addField(category) {
+    // Sync DOM → currentFields first to preserve any unsaved edits
+    syncFieldsFromDOM();
+
     const name = 'new_field_' + Date.now();
     currentFields[category] = currentFields[category] || {};
     currentFields[category][name] = {
@@ -417,26 +426,31 @@ function addField(category) {
         hint: '',
         extends_only: false,
     };
-    renderAllCategories($('#ass-tracked-fields-container'));
+    openCategories[category] = true;
+    snapshotOpenCategories();
+    renderAllCategories();
     scheduleSave();
 }
 
 async function loadDefaults(category) {
+    // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
+    syncFieldsFromDOM();
+
+    // Load and replace this category entirely
     const defaults = await loadDefaultCategory(category);
     currentFields[category] = defaults;
-    // Ensure the category we just loaded is open in the re-render
-    const $container = $('#ass-tracked-fields-container');
-    // Temporarily mark it open so renderAllCategories picks it up
-    $container.find(`.ass-tf-add-field[data-category="${category}"]`)
-        .closest('.ass-tf-category').attr('open', '');
-    renderAllCategories($container);
+    openCategories[category] = true;
+    snapshotOpenCategories();
+    renderAllCategories();
     scheduleSave();
     console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
 }
 
 function removeField(category, key) {
+    syncFieldsFromDOM();
     delete currentFields[category]?.[key];
-    renderAllCategories($('#ass-tracked-fields-container'));
+    snapshotOpenCategories();
+    renderAllCategories();
     scheduleSave();
 }
 
@@ -445,11 +459,11 @@ function removeField(category, key) {
  * If the parent is a simple field, convert it to a group first.
  */
 function addSubFieldToGroup(category, key) {
+    syncFieldsFromDOM();
     const field = findField(currentFields[category], key);
     if (!field) return;
 
     if (!isGroup(field)) {
-        // Convert simple field to group — move type/hint into first sub-field
         field.fields = {};
         field.fields['sub_1'] = {
             type: field.type || 'string',
@@ -465,7 +479,8 @@ function addSubFieldToGroup(category, key) {
         field.fields[subName] = { type: 'string', hint: '', extends_only: false };
     }
 
-    renderAllCategories($('#ass-tracked-fields-container'));
+    snapshotOpenCategories();
+    renderAllCategories();
     scheduleSave();
 }
 
@@ -473,11 +488,11 @@ function addSubFieldToGroup(category, key) {
  * Add a sub-group (nested group) to an existing group.
  */
 function addSubGroup(category, key) {
+    syncFieldsFromDOM();
     const field = findField(currentFields[category], key);
     if (!field) return;
 
     if (!isGroup(field)) {
-        // Convert simple field to group first
         field.fields = {};
         field.fields['sub_1'] = {
             type: field.type || 'string',
@@ -497,11 +512,13 @@ function addSubGroup(category, key) {
         fields: {},
     };
 
-    renderAllCategories($('#ass-tracked-fields-container'));
+    snapshotOpenCategories();
+    renderAllCategories();
     scheduleSave();
 }
 
 function removeSubField(category, parentKey, subKey) {
+    syncFieldsFromDOM();
     const parent = findField(currentFields[category], parentKey);
     if (!parent?.fields) return;
 
@@ -516,63 +533,167 @@ function removeSubField(category, parentKey, subKey) {
         if (parent.is_dynamic !== undefined) delete parent.is_dynamic;
     }
 
-    renderAllCategories($('#ass-tracked-fields-container'));
+    snapshotOpenCategories();
+    renderAllCategories();
     scheduleSave();
 }
 
-/**
- * Find a field by key path in the nested structure.
- * For top-level: findField(obj, 'physical')
- * For nested: findField(obj, 'physical.fields.health') — not needed,
- *   since we use DOM traversal for context.
- *
- * Actually, for the current flat key approach at each level,
- * this is a simple property lookup.
- */
 function findField(parentObj, key) {
     return parentObj?.[key];
 }
 
 // #############################################
-// # Event Binding
+// # Modal Panel
 // #############################################
 
-function bindEvents($container) {
-    $container.off('.ass-tf');
+/**
+ * Open the tracked fields editor modal.
+ */
+function openTFModal() {
+    if ($('#ass-tf-overlay').length) return;
 
-    // Prevent button clicks inside <details> from toggling the details closed.
-    // Without this, clicking "Add field" / "Load Defaults" etc. would close
-    // the <details> as a side-effect of the browser's default toggle behavior.
-    $container.on('click.ass-tf', '.ass-tf-category button', function (e) {
+    // Reset open state — categories with fields start open
+    for (const cat of ['character', 'scenario', 'shared']) {
+        const data = currentFields[cat];
+        openCategories[cat] = data && typeof data === 'object' && Object.keys(data).length > 0;
+    }
+
+    const categoriesHtml = renderModalCategories();
+
+    const html = `
+    <div id="ass-tf-overlay" class="ass-tf-overlay">
+        <div class="ass-tf-modal" id="ass-tf-modal">
+            <div class="ass-tf-modal-header">
+                <h3><i class="fa-solid fa-database"></i> Database Tracked Fields</h3>
+                <button id="ass-tf-modal-close" class="ass-tf-modal-close" type="button">&times;</button>
+            </div>
+            <div class="ass-tf-modal-body">
+                <div id="ass-tf-modal-fields">
+                    ${categoriesHtml}
+                </div>
+                <div class="ass-tf-modal-info">
+                    Define the tracked field schema for the Agent's state database.
+                    These are the global fields — per-character and per-persona additions
+                    are configured in their respective brain panels.
+                    <br><br>
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat (Character category only).
+                    <br>
+                    <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
+                </div>
+            </div>
+        </div>
+    </div>`;
+
+    $('body').append(html);
+    bindModalEvents();
+}
+
+function renderModalCategories() {
+    const categories = [
+        { key: 'character', label: 'Character', open: openCategories['character'], allowSecret: true },
+        { key: 'scenario',  label: 'Scenario',  open: openCategories['scenario'],  allowSecret: false },
+        { key: 'shared',    label: 'Shared',    open: openCategories['shared'],    allowSecret: false },
+    ];
+
+    let html = '';
+    for (const cat of categories) {
+        html += renderCategory(cat);
+    }
+    return html;
+}
+
+/**
+ * Close the modal — no save needed here because all edits
+ * are saved live via scheduleSave().
+ */
+function closeTFModal() {
+    // Final sync in case there are unsaved input changes
+    syncFieldsFromDOM();
+    saveTrackedFields();
+
+    $('#ass-tf-overlay').remove();
+    $(document).off('keydown.ass-tf-modal');
+
+    // Update the field count badge on the settings button
+    updateTFButton();
+}
+
+/**
+ * Update the button text/badge in the settings panel to show
+ * how many fields are defined.
+ */
+function updateTFButton() {
+    const $btn = $('#ass-tf-open-btn');
+    if (!$btn.length) return;
+
+    let total = 0;
+    for (const cat of ['character', 'scenario', 'shared']) {
+        const data = currentFields[cat];
+        if (data && typeof data === 'object') {
+            total += Object.keys(data).length;
+        }
+    }
+
+    const badge = total > 0 ? ` (${total})` : '';
+    $btn.html(`<i class="fa-solid fa-database"></i> Database Tracked Fields${badge}`);
+}
+
+// #############################################
+// # Modal Event Binding
+// #############################################
+
+function bindModalEvents() {
+    const $modal = $('#ass-tf-modal');
+
+    // Close button
+    $('#ass-tf-modal-close').on('click', closeTFModal);
+
+    // Click backdrop to close
+    $('#ass-tf-overlay').on('mousedown', function (e) {
+        if ($(e.target).is('#ass-tf-overlay')) closeTFModal();
+    });
+
+    // Escape to close
+    $(document).on('keydown.ass-tf-modal', function (e) {
+        if (e.key === 'Escape') closeTFModal();
+    });
+
+    // Prevent button clicks inside <details> from toggling the details closed
+    $modal.on('click.ass-tf', '.ass-tf-category button', function (e) {
         e.preventDefault();
     });
 
-    // Input changes — sync DOM → currentFields immediately for live saves
-    $container.on('input.ass-tf', '.ass-tf-name, .ass-tf-hint, .ass-tf-desc, .ass-tf-type, ' +
-        '.ass-tf-sub-name, .ass-tf-sub-type, .ass-tf-sub-hint', function () {
+    // Track category open/close state
+    $modal.on('toggle.ass-tf', '.ass-tf-category', function () {
+        const key = $(this).attr('data-category');
+        if (key) openCategories[key] = this.open;
+    });
+
+    // Input changes — live sync + save
+    $modal.on('input.ass-tf', '.ass-tf-name, .ass-tf-hint, .ass-tf-desc, .ass-tf-type', function () {
         syncFieldsFromDOM();
         scheduleSave();
     });
 
-    // Checkbox changes — sync DOM → currentFields immediately for live saves
-    $container.on('change.ass-tf', '.ass-tf-extends, .ass-tf-dynamic, .ass-tf-secret', function () {
+    // Checkbox changes — live sync + save
+    $modal.on('change.ass-tf', '.ass-tf-extends, .ass-tf-dynamic, .ass-tf-secret', function () {
         syncFieldsFromDOM();
         scheduleSave();
     });
 
     // Add field
-    $container.on('click.ass-tf', '.ass-tf-add-field', function () {
+    $modal.on('click.ass-tf', '.ass-tf-add-field', function () {
         addField($(this).attr('data-category'));
     });
 
     // Load defaults
-    $container.on('click.ass-tf', '.ass-tf-load-defaults', async function () {
+    $modal.on('click.ass-tf', '.ass-tf-load-defaults', async function () {
         const category = $(this).attr('data-category');
         await loadDefaults(category);
     });
 
     // Remove field
-    $container.on('click.ass-tf', '.ass-tf-remove-field', function () {
+    $modal.on('click.ass-tf', '.ass-tf-remove-field', function () {
         const $field = $(this).closest('.ass-tf-field');
         const category = $field.attr('data-category');
         const depth = parseInt($field.attr('data-depth') || '0', 10);
@@ -580,7 +701,6 @@ function bindEvents($container) {
         if (depth === 0) {
             removeField(category, $field.attr('data-key'));
         } else {
-            // Nested field — find parent and remove from parent.fields
             const $parent = $field.parent().closest('.ass-tf-field');
             const parentKey = $parent.attr('data-key');
             removeSubField(category, parentKey, $field.attr('data-key'));
@@ -588,26 +708,19 @@ function bindEvents($container) {
     });
 
     // Add sub-field to group
-    $container.on('click.ass-tf', '.ass-tf-add-subfield', function () {
+    $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
         addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
     });
 
     // Add sub-field via sitemap button (converts to group)
-    $container.on('click.ass-tf', '.ass-tf-add-sub-to-field', function () {
+    $modal.on('click.ass-tf', '.ass-tf-add-sub-to-field', function () {
         const $field = $(this).closest('.ass-tf-field');
         addSubFieldToGroup($field.attr('data-category'), $field.attr('data-key'));
     });
 
     // Add sub-group
-    $container.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
+    $modal.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
         addSubGroup($(this).attr('data-category'), $(this).attr('data-key'));
-    });
-
-    // Remove sub-field (X button) — kept for backward compat
-    $container.on('click.ass-tf', '.ass-tf-remove-subfield', function () {
-        const $subrow = $(this).closest('.ass-tf-subfield-row');
-        const $field = $subrow.closest('.ass-tf-field');
-        removeSubField($field.attr('data-category'), $field.attr('data-key'), $subrow.attr('data-subkey'));
     });
 }
 
@@ -619,6 +732,144 @@ function injectCSS() {
     if ($('#ass-tf-css').length) return;
 
     const css = `<style id="ass-tf-css">
+    /* Settings button */
+    #ass-tf-open-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 6px 10px;
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        border-radius: 4px;
+        background: rgba(128, 128, 128, 0.1);
+        color: var(--fg);
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.2s, border-color 0.2s;
+        white-space: nowrap;
+    }
+    #ass-tf-open-btn:hover {
+        background: rgba(128, 128, 128, 0.2);
+        border-color: rgba(128, 128, 128, 0.4);
+    }
+    #ass-tf-open-btn i {
+        color: #9b59b6;
+    }
+
+    /* Overlay backdrop */
+    .ass-tf-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: ass-tf-fade-in 0.15s ease-out;
+    }
+    @keyframes ass-tf-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    /* Modal panel — wide for horizontal field rows */
+    .ass-tf-modal {
+        background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
+        border: 1px solid rgba(128, 128, 128, 0.3);
+        border-radius: 10px;
+        width: 820px;
+        max-width: 95vw;
+        max-height: 85vh;
+        overflow-y: auto;
+        padding: 20px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        animation: ass-tf-slide-in 0.2s ease-out;
+    }
+    @keyframes ass-tf-slide-in {
+        from { transform: translateY(20px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* Modal header */
+    .ass-tf-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+    }
+    .ass-tf-modal-header h3 {
+        margin: 0;
+        color: var(--fg);
+        font-size: 15px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .ass-tf-modal-header h3 i {
+        color: #9b59b6;
+    }
+    .ass-tf-modal-close {
+        background: none;
+        border: none;
+        color: var(--fg_dim);
+        font-size: 22px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+        transition: color 0.2s;
+    }
+    .ass-tf-modal-close:hover {
+        color: var(--fg);
+    }
+
+    /* Modal body */
+    .ass-tf-modal-body {
+        /* just a wrapper */
+    }
+    .ass-tf-modal-info {
+        font-size: 11px;
+        color: var(--fg_dim);
+        margin-top: 12px;
+        line-height: 1.6;
+        padding-top: 10px;
+        border-top: 1px solid rgba(128, 128, 128, 0.2);
+    }
+
+    /* Category details/summary */
+    .ass-tf-category {
+        margin-bottom: 6px;
+    }
+    .ass-tf-category-summary {
+        cursor: pointer;
+        padding: 6px 0;
+        font-size: 13px;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .ass-tf-category-summary:hover {
+        color: var(--fg);
+    }
+    .ass-tf-category[open] > .ass-tf-category-summary {
+        margin-bottom: 6px;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+    }
+    .ass-tf-count {
+        font-size: 11px;
+        background: rgba(155, 89, 182, 0.2);
+        color: #9b59b6;
+        border-radius: 8px;
+        padding: 1px 6px;
+        font-weight: 600;
+    }
+    .ass-tf-category-actions {
+        margin: 8px 0 4px 0;
+        display: flex;
+        gap: 6px;
+    }
+
     /* Tracked field containers */
     .ass-tf-field {
         background: rgba(128, 128, 128, 0.06);
@@ -631,7 +882,6 @@ function injectCSS() {
         background: rgba(92, 184, 92, 0.04);
         border-color: rgba(92, 184, 92, 0.18);
     }
-    /* Nested fields get a slightly different tint per depth */
     .ass-tf-nested {
         background: rgba(128, 128, 128, 0.04);
         border-color: rgba(128, 128, 128, 0.12);
@@ -645,12 +895,23 @@ function injectCSS() {
         margin-bottom: 4px;
     }
     .ass-tf-row:last-child { margin-bottom: 0; }
+    .ass-tf-row .ass-tf-name { flex: 1; min-width: 120px; }
+    .ass-tf-row .ass-tf-hint { flex: 3; min-width: 150px; }
+    .ass-tf-row .ass-tf-desc { flex: 3; min-width: 150px; }
+    .ass-tf-row .ass-tf-type { flex: 0 0 130px; }
 
     /* Sub-fields container */
     .ass-tf-subfields {
         margin: 6px 0 4px 16px;
         padding-left: 10px;
         border-left: 2px solid rgba(128, 128, 128, 0.2);
+    }
+
+    /* Group action buttons */
+    .ass-tf-group-actions {
+        margin: 4px 0 4px 20px;
+        display: flex;
+        gap: 6px;
     }
 
     /* Checkbox labels */
@@ -677,16 +938,6 @@ function injectCSS() {
         height: 14px;
     }
 
-    /* Category details/summary */
-    .ass-tf-category { margin-bottom: 4px; }
-    .ass-tf-category summary {
-        cursor: pointer;
-        padding: 4px 0;
-        font-size: 13px;
-        user-select: none;
-    }
-    .ass-tf-category[open] > summary { margin-bottom: 6px; }
-
     /* Load defaults button */
     .ass-tf-load-defaults {
         opacity: 0.7;
@@ -705,27 +956,19 @@ function injectCSS() {
 
 /**
  * Initialize the tracked fields UI.
- * Called from ui.js during extension init.
- * Renders the collapsible editor into #ass-tracked-fields-container.
+ * Called from ui-settings.js during extension init.
+ * Injects CSS and binds the "open modal" button.
+ * Data is loaded lazily when the modal opens.
  */
 export async function initTrackedFieldsUI() {
     injectCSS();
 
+    // Load data at init time so it's ready for the payload
     currentFields = await loadTrackedFields();
 
-    const $container = $('#ass-tracked-fields-container');
-    if (!$container.length) return;
+    // Bind the "open modal" button
+    $('#ass-tf-open-btn').on('click', openTFModal);
 
-    renderAllCategories($container);
-
-    // On first render, auto-open categories that have fields
-    $container.find('.ass-tf-category').each(function () {
-        const $cat = $(this);
-        const hasFields = $cat.find('.ass-tf-field').length > 0;
-        if (hasFields) {
-            this.open = true;
-        }
-    });
-
-    bindEvents($container);
+    // Update button badge
+    updateTFButton();
 }
