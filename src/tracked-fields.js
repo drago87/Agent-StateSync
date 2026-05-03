@@ -41,29 +41,55 @@ let openCategories = { character: false, scenario: false, shared: false };
 
 /**
  * Resolve the extension's base URL (where config.json and default JSON files live).
- * SillyTavern loads extensions from /scripts/extensions/<folderName>/.
+ * Uses import.meta.url (standard ES module API) which is always correct
+ * regardless of how SillyTavern loads extensions.
  */
 function getExtensionBaseUrl() {
-    // Look for any <script> or <link> tag that reveals our extension path
+    // import.meta.url gives the full URL of this module file, e.g.
+    //   https://host/scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
+    // We strip the filename to get the directory.
+    try {
+        const moduleUrl = new URL(import.meta.url);
+        const path = moduleUrl.pathname; // e.g. /scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
+        const dir = path.substring(0, path.lastIndexOf('/') + 1); // strip filename
+        return dir;
+    } catch (e) {
+        console.warn('[Agent-StateSync] import.meta.url failed, falling back to script scan:', e.message);
+    }
+
+    // Fallback: scan <script> tags
     const scripts = document.querySelectorAll('script[src]');
     for (const s of scripts) {
         const src = s.getAttribute('src') || '';
         const match = src.match(/^(.*\/Agent-StateSync\/)/i);
         if (match) return match[1];
     }
-    // Fallback: use the known SillyTavern extensions path
-    return '/scripts/extensions/Agent-StateSync/';
+    // Last resort
+    return '/scripts/extensions/third-party/Agent-StateSync/';
 }
 
 /**
  * Load default tracked fields from the external JSON files.
  * Returns a promise that resolves to the defaults object.
- * Caches after first load.
+ * Caches after first successful load.
+ * If the cache contains only empty categories (fetch failures),
+ * it is invalidated so the next call will retry.
  */
 async function loadDefaultFields() {
-    if (defaultFieldsCache) return defaultFieldsCache;
+    // If we have a cached version with actual content, return it
+    if (defaultFieldsCache) {
+        const hasContent = ['character', 'scenario', 'shared'].some(
+            cat => defaultFieldsCache[cat] && Object.keys(defaultFieldsCache[cat]).length > 0
+        );
+        if (hasContent) return defaultFieldsCache;
+        // Cache is all-empty (previous fetch failure) — invalidate and retry
+        console.log('[Agent-StateSync] Default fields cache was empty, retrying fetch...');
+        defaultFieldsCache = null;
+    }
 
     const base = getExtensionBaseUrl();
+    console.log(`[Agent-StateSync] Loading default fields from: ${base}`);
+
     const files = {
         character: 'default-tracked-character.json',
         scenario: 'default-tracked-scenario.json',
@@ -74,11 +100,15 @@ async function loadDefaultFields() {
 
     const promises = Object.entries(files).map(async ([key, filename]) => {
         try {
-            const resp = await fetch(`${base}${filename}`);
+            const url = `${base}${filename}`;
+            console.log(`[Agent-StateSync] Fetching: ${url}`);
+            const resp = await fetch(url);
             if (resp.ok) {
                 result[key] = await resp.json();
+                const count = Object.keys(result[key]).length;
+                console.log(`[Agent-StateSync] Loaded ${filename}: ${count} fields`);
             } else {
-                console.warn(`[Agent-StateSync] Failed to load ${filename}: ${resp.status}`);
+                console.warn(`[Agent-StateSync] Failed to load ${filename}: HTTP ${resp.status} from ${url}`);
             }
         } catch (e) {
             console.warn(`[Agent-StateSync] Failed to fetch ${filename}:`, e.message);
@@ -433,17 +463,31 @@ function addField(category) {
 }
 
 async function loadDefaults(category) {
-    // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
-    syncFieldsFromDOM();
+    try {
+        // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
+        syncFieldsFromDOM();
 
-    // Load and replace this category entirely
-    const defaults = await loadDefaultCategory(category);
-    currentFields[category] = defaults;
-    openCategories[category] = true;
-    snapshotOpenCategories();
-    renderAllCategories();
-    scheduleSave();
-    console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
+        // Load and replace this category entirely
+        const defaults = await loadDefaultCategory(category);
+        const count = Object.keys(defaults).length;
+        console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from JSON`);
+
+        if (count === 0) {
+            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing or URL may be wrong. Base URL: ${getExtensionBaseUrl()}`);
+            toastr.warning(`Could not load defaults for ${category} — JSON file not found. Check the browser console (F12) for details.`, 'Agent-StateSync');
+            return;
+        }
+
+        currentFields[category] = defaults;
+        openCategories[category] = true;
+        snapshotOpenCategories();
+        renderAllCategories();
+        scheduleSave();
+        console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
+    } catch (err) {
+        console.error(`[Agent-StateSync] loadDefaults("${category}") error:`, err);
+        toastr.error(`Error loading defaults: ${err.message}`, 'Agent-StateSync');
+    }
 }
 
 function removeField(category, key) {
