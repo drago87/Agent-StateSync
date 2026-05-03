@@ -1,19 +1,27 @@
-// brain-tf-additions.js — Tracked Fields Additions UI for the Brain Panel
+// brain-tf-additions.js — Agent-StateSync Tracked Field Additions Editor
 //
-// Handles rendering, reading, and event binding for the
-// "Database Tracked Fields Additions" section inside the
-// Agent Character Config panel.
+// Shared component used by both char-config.js and persona-config.js.
+// Renders the "Database Tracked Fields Additions" panel inside
+// the brain/persona popout panels.
 //
-// Storage format: ARRAY of entries (v2)
-//   Simple: [{ name: "FieldName", type: "string", hint: "", extends_only: false }, ...]
-//   Group:  [{ name: "Group", description: "", is_dynamic: false, fields: [...] }, ...]
+// Uses ARRAY storage format (v2):
+//   [{ name: "FieldName", type, hint, extends_only, secret }, ...]
+//   Arrays replace entirely on merge — no ghost fields after F5.
 //
-// Arrays replace entirely on merge — no ghost fields after F5.
+// Supports:
+//   - Arbitrary nested sub-fields (sub-fields can contain sub-groups)
+//   - Secret checkbox (marks fields as private for other characters)
+//   - Sub-groups (add nested group within a group)
+//   - Group→Simple back-conversion (when last sub-field removed)
 //
-// File Version: 1.0.0
+// Event binding uses delegated handlers on the panel element.
+// The .ass-btf-container element stays stable across re-renders
+// (only innerHTML changes), so delegated events survive.
+//
+// File Version: 2.1.0
 
 // #############################################
-// # Helpers
+// # HTML Helpers
 // #############################################
 
 function escapeAttr(str) {
@@ -28,36 +36,80 @@ function buildTypeOptions(selected) {
     ).join('');
 }
 
-function isTFGroup(entry) {
-    return entry && entry.fields !== undefined;
+// #############################################
+// # Render Functions
+// #############################################
+
+/**
+ * Render the full TF additions container.
+ * Returns HTML including the .ass-btf-container wrapper.
+ * @param {Array} additions - Array of field entries
+ * @param {object} opts - { allowSecret: boolean }
+ */
+export function renderTFAdditions(additions, opts = {}) {
+    const allowSecret = opts.allowSecret !== false; // default true
+    const fieldsHtml = renderFieldsInner(additions, opts);
+
+    return `
+    <div class="ass-btf-container" data-allow-secret="${allowSecret}">
+        ${fieldsHtml}
+    </div>`;
 }
 
-// #############################################
-// # Render
-// #############################################
+/**
+ * Render just the field HTML (no container wrapper).
+ * Used internally for re-renders that keep the container stable.
+ */
+function renderFieldsInner(additions, opts = {}) {
+    const allowSecret = opts.allowSecret !== false;
 
-export function renderTFAdditions(additions) {
     if (!Array.isArray(additions) || additions.length === 0) {
         return '<small style="color:var(--fg_dim);">No additions defined.</small>';
     }
 
     let html = '';
-    for (let i = 0; i < additions.length; i++) {
-        html += isTFGroup(additions[i])
-            ? renderTFAdditionGroup(additions[i], i)
-            : renderTFAdditionSimple(additions[i], i);
-    }
+    additions.forEach((entry, index) => {
+        html += renderAdditionField(entry, index, 0, allowSecret);
+    });
     return html;
 }
 
-function renderTFAdditionSimple(field, index) {
-    const name = field.name || '';
-    const type = field.type || 'string';
-    const hint = field.hint || '';
-    const extendsOnly = field.extends_only || false;
+/**
+ * Render a single addition field (simple or group).
+ * Supports arbitrary nesting via recursion.
+ */
+function renderAdditionField(entry, index, depth, allowSecret) {
+    if (isGroupEntry(entry)) {
+        return renderAdditionGroup(entry, index, depth, allowSecret);
+    }
+    return renderAdditionSimple(entry, index, depth, allowSecret);
+}
+
+function renderAdditionSimple(entry, index, depth, allowSecret) {
+    const name = entry.name || '';
+    const type = entry.type || 'string';
+    const hint = entry.hint || '';
+    const extendsOnly = entry.extends_only || false;
+    const secret = entry.secret || false;
+    const isNested = depth > 0;
+
+    const secretHtml = allowSecret
+        ? `<label class="ass-btf-secret-label" title="Mark as secret — hidden from other characters">
+               <input type="checkbox" class="ass-btf-secret" ${secret ? 'checked' : ''}>
+               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
+           </label>`
+        : '';
+
+    const addSubBtn = !isNested
+        ? `<button class="menu_button ass-btf-add-sub-to-field" title="Add sub-field (converts to group)">
+               <i class="fa-solid fa-sitemap"></i>
+           </button>`
+        : '';
+
+    const depthClass = isNested ? 'ass-btf-nested' : '';
 
     return `
-    <div class="ass-btf-field" data-tf-index="${index}">
+    <div class="ass-btf-field ${depthClass}" data-index="${index}" data-depth="${depth}">
         <div class="ass-btf-row">
             <input class="text_pole ass-btf-name" value="${escapeAttr(name)}"
                    placeholder="Field name" style="flex:1; min-width:0;">
@@ -69,10 +121,8 @@ function renderTFAdditionSimple(field, index) {
             <label class="ass-btf-extends-label" title="Only extends this and will not overwrite">
                 <input type="checkbox" class="ass-btf-extends" ${extendsOnly ? 'checked' : ''}>
             </label>
-            <button class="menu_button ass-btf-add-sub-to-field"
-                    title="Add sub-field (converts to group)">
-                <i class="fa-solid fa-sitemap"></i>
-            </button>
+            ${secretHtml}
+            ${addSubBtn}
             <button class="menu_button ass-btf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -80,39 +130,27 @@ function renderTFAdditionSimple(field, index) {
     </div>`;
 }
 
-function renderTFAdditionGroup(field, index) {
-    const name = field.name || '';
-    const description = field.description || '';
-    const isDynamic = field.is_dynamic || false;
-    const fields = Array.isArray(field.fields) ? field.fields : [];
+function renderAdditionGroup(entry, index, depth, allowSecret) {
+    const name = entry.name || '';
+    const description = entry.description || '';
+    const isDynamic = entry.is_dynamic || false;
+    const secret = entry.secret || false;
+    const fields = entry.fields || [];
+
+    const secretHtml = allowSecret
+        ? `<label class="ass-btf-secret-label" title="Mark as secret — hidden from other characters">
+               <input type="checkbox" class="ass-btf-secret" ${secret ? 'checked' : ''}>
+               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
+           </label>`
+        : '';
 
     let subfieldsHtml = '';
-    for (let si = 0; si < fields.length; si++) {
-        const sub = fields[si];
-        const type = sub.type || 'string';
-        const hint = sub.hint || '';
-        const extendsOnly = sub.extends_only || false;
-
-        subfieldsHtml += `
-        <div class="ass-btf-row ass-btf-subfield-row" data-tf-subindex="${si}">
-            <input class="text_pole ass-btf-sub-name" value="${escapeAttr(sub.name || '')}"
-                   placeholder="Sub-field name" style="flex:1; min-width:0;">
-            <select class="text_pole ass-btf-sub-type" style="flex:0 0 130px;">
-                ${buildTypeOptions(type)}
-            </select>
-            <input class="text_pole ass-btf-sub-hint" value="${escapeAttr(hint)}"
-                   placeholder="Hint" style="flex:2; min-width:0;">
-            <label class="ass-btf-extends-label" title="Only extends this and will not overwrite">
-                <input type="checkbox" class="ass-btf-extends" ${extendsOnly ? 'checked' : ''}>
-            </label>
-            <button class="menu_button ass-btf-remove-subfield" title="Remove sub-field">
-                <i class="fa-solid fa-xmark"></i>
-            </button>
-        </div>`;
-    }
+    fields.forEach((subEntry, subIndex) => {
+        subfieldsHtml += renderAdditionField(subEntry, subIndex, depth + 1, allowSecret);
+    });
 
     return `
-    <div class="ass-btf-field ass-btf-group" data-tf-index="${index}">
+    <div class="ass-btf-field ass-btf-group" data-index="${index}" data-depth="${depth}">
         <div class="ass-btf-row">
             <input class="text_pole ass-btf-name" value="${escapeAttr(name)}"
                    placeholder="Group name" style="flex:1; min-width:0;">
@@ -122,6 +160,7 @@ function renderTFAdditionGroup(field, index) {
                 <input type="checkbox" class="ass-btf-dynamic" ${isDynamic ? 'checked' : ''}>
                 <small>Dyn</small>
             </label>
+            ${secretHtml}
             <button class="menu_button ass-btf-remove-field" title="Remove group">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -129,145 +168,183 @@ function renderTFAdditionGroup(field, index) {
         <div class="ass-btf-subfields">
             ${subfieldsHtml}
         </div>
-        <div style="margin:4px 0 4px 20px;">
+        <div style="margin:4px 0 4px 20px; display:flex; gap:6px;">
             <button class="menu_button ass-btf-add-subfield">
                 <i class="fa-solid fa-plus"></i> Add sub-field
+            </button>
+            <button class="menu_button ass-btf-add-subgroup">
+                <i class="fa-solid fa-folder-plus"></i> Add sub-group
             </button>
         </div>
     </div>`;
 }
 
+function isGroupEntry(entry) {
+    return entry && entry.fields !== undefined;
+}
+
 // #############################################
-// # Read from DOM
+// # Read UI → Data
 // #############################################
 
-export function readTFAdditionsFromUI() {
-    const additions = [];
-    $('#ass-brain-tf-additions .ass-btf-field').each(function () {
-        const $field = $(this);
-        const name = ($field.find('> .ass-btf-row > .ass-btf-name').val() || '').trim();
-        if (!name) return;
+/**
+ * Read all tracked field additions from the DOM.
+ * Returns an array in v2 format.
+ * @param {string} panelSelector - CSS selector to scope the search (e.g. '#ass-brain-panel')
+ */
+export function readTFAdditionsFromUI(panelSelector = '') {
+    const prefix = panelSelector ? `${panelSelector} ` : '';
+    const $container = $(`${prefix}.ass-btf-container`).first();
+    if (!$container.length) return [];
 
-        if ($field.hasClass('ass-btf-group')) {
-            const group = {
-                name: name,
-                description: ($field.find('.ass-btf-desc').val() || '').trim(),
-                is_dynamic: $field.find('.ass-btf-dynamic').is(':checked'),
-                fields: [],
-            };
-            $field.find('.ass-btf-subfield-row').each(function () {
-                const subName = ($(this).find('.ass-btf-sub-name').val() || '').trim();
-                if (!subName) return;
-                group.fields.push({
-                    name: subName,
-                    type: $(this).find('.ass-btf-sub-type').val() || 'string',
-                    hint: ($(this).find('.ass-btf-sub-hint').val() || '').trim(),
-                    extends_only: $(this).find('.ass-btf-extends').is(':checked'),
-                });
-            });
-            additions.push(group);
-        } else {
-            additions.push({
-                name: name,
-                type: $field.find('.ass-btf-type').val() || 'string',
-                hint: ($field.find('.ass-btf-hint').val() || '').trim(),
-                extends_only: $field.find('.ass-btf-extends').is(':checked'),
-            });
+    const result = [];
+    $container.children('.ass-btf-field').each(function () {
+        result.push(readAdditionFieldFromDOM($(this)));
+    });
+    return result;
+}
+
+/**
+ * Read a single addition field from its DOM element.
+ * Recursively reads nested sub-fields.
+ */
+function readAdditionFieldFromDOM($el) {
+    if ($el.hasClass('ass-btf-group')) {
+        const result = {
+            name: ($el.find('> .ass-btf-row > .ass-btf-name').val() || '').trim(),
+            description: ($el.find('> .ass-btf-row > .ass-btf-desc').val() || '').trim(),
+            is_dynamic: $el.find('> .ass-btf-row > .ass-btf-dynamic').is(':checked'),
+            fields: [],
+        };
+
+        // Read secret
+        const $secret = $el.find('> .ass-btf-row > .ass-btf-secret-label > .ass-btf-secret');
+        if ($secret.length) {
+            result.secret = $secret.is(':checked');
         }
-    });
-    return additions;
-}
 
-// #############################################
-// # Render Container
-// #############################################
+        // Read direct child fields
+        $el.children('.ass-btf-subfields').children('.ass-btf-field').each(function () {
+            result.fields.push(readAdditionFieldFromDOM($(this)));
+        });
 
-export function renderTFContainer(additions) {
-    $('#ass-brain-tf-additions').html(renderTFAdditions(additions));
-}
+        return result;
+    } else {
+        const result = {
+            name: ($el.find('> .ass-btf-row > .ass-btf-name').val() || '').trim(),
+            type: $el.find('> .ass-btf-row > .ass-btf-type').val() || 'string',
+            hint: ($el.find('> .ass-btf-row > .ass-btf-hint').val() || '').trim(),
+            extends_only: $el.find('> .ass-btf-row > .ass-btf-extends').is(':checked'),
+        };
 
-// #############################################
-// # Handlers
-// #############################################
+        // Read secret
+        const $secret = $el.find('> .ass-btf-row > .ass-btf-secret-label > .ass-btf-secret');
+        if ($secret.length) {
+            result.secret = $secret.is(':checked');
+        }
 
-function handleTFAddField() {
-    const additions = readTFAdditionsFromUI();
-    additions.push({
-        name: 'new_field_' + Date.now(),
-        type: 'string',
-        hint: '',
-        extends_only: false,
-    });
-    renderTFContainer(additions);
-}
-
-function handleTFRemoveField(button) {
-    const additions = readTFAdditionsFromUI();
-    const index = parseInt($(button).closest('.ass-btf-field').attr('data-tf-index'));
-    if (!isNaN(index) && index >= 0 && index < additions.length) {
-        additions.splice(index, 1);
+        return result;
     }
-    renderTFContainer(additions);
 }
 
-function handleTFConvertToGroup(button) {
-    const additions = readTFAdditionsFromUI();
-    const index = parseInt($(button).closest('.ass-btf-field').attr('data-tf-index'));
-    const field = additions[index];
-    if (!field || isTFGroup(field)) return;
+// #############################################
+// # Container Re-render (stable container)
+// #############################################
 
-    additions[index] = {
-        name: field.name,
-        description: field.hint || '',
-        is_dynamic: false,
-        fields: [{
-            name: 'sub_1',
-            type: field.type || 'string',
-            hint: '',
-            extends_only: false,
-        }],
-    };
-    renderTFContainer(additions);
+/**
+ * Re-render additions inside the existing .ass-btf-container.
+ * Only replaces innerHTML — the container element stays stable
+ * so delegated events survive across re-renders.
+ */
+export function renderTFContainer(additions, panelSelector = '') {
+    const prefix = panelSelector ? `${panelSelector} ` : '';
+    const $container = $(`${prefix}.ass-btf-container`).first();
+    if (!$container.length) return;
+
+    const allowSecret = $container.attr('data-allow-secret') !== 'false';
+    $container.html(renderFieldsInner(additions, { allowSecret }));
 }
 
-function handleTFAddSubField(button) {
-    const additions = readTFAdditionsFromUI();
-    const index = parseInt($(button).closest('.ass-btf-field').attr('data-tf-index'));
-    const group = additions[index];
-    if (!group || !isTFGroup(group)) return;
+// #############################################
+// # Path Helpers
+// #############################################
 
-    if (!group.fields) group.fields = [];
-    group.fields.push({
-        name: 'new_sub_' + Date.now(),
-        type: 'string',
-        hint: '',
-        extends_only: false,
-    });
+/**
+ * Build an index path from the DOM, walking up from a field element
+ * to the container root.
+ * E.g. for a sub-field at additions[1].fields[2]:
+ *   path = [1, 2]
+ */
+function buildFieldPath($field) {
+    const path = [];
+    let $current = $field;
 
-    renderTFContainer(additions);
+    while ($current.length && $current.hasClass('ass-btf-field')) {
+        const index = parseInt($current.attr('data-index') || '0', 10);
+        path.unshift(index);
+        $current = $current.parent().closest('.ass-btf-field');
+    }
+
+    return path;
 }
 
-function handleTFRemoveSubField(button) {
-    const additions = readTFAdditionsFromUI();
-    const $group = $(button).closest('.ass-btf-field');
-    const groupIndex = parseInt($group.attr('data-tf-index'));
-    const subIndex = parseInt($(button).closest('.ass-btf-subfield-row').attr('data-tf-subindex'));
-    const group = additions[groupIndex];
-    if (!group?.fields) return;
+/**
+ * Navigate the additions array using an index path.
+ * Returns the entry at the given path, or null if not found.
+ */
+function findEntryByPath(additions, path) {
+    if (path.length === 0) return null;
 
-    group.fields.splice(subIndex, 1);
+    let current = additions;
+    for (let i = 0; i < path.length; i++) {
+        const idx = path[i];
+        if (i === 0) {
+            if (!Array.isArray(current) || idx >= current.length) return null;
+            current = current[idx];
+        } else {
+            if (!current || !Array.isArray(current.fields) || idx >= current.fields.length) return null;
+            current = current.fields[idx];
+        }
+    }
+    return current;
+}
 
-    // If no sub-fields left, convert back to simple
-    if (group.fields.length === 0) {
-        additions[groupIndex] = {
-            name: group.name,
+/**
+ * Remove an entry from the additions array at the given path.
+ * After removal, if a group is left with no fields and is not
+ * dynamic, it is converted back to a simple field.
+ *
+ * Recursive: navigates into nested .fields arrays.
+ */
+function removeFromAdditions(additions, path) {
+    if (path.length === 0) return;
+
+    if (path.length === 1) {
+        // Top-level entry
+        additions.splice(path[0], 1);
+        return;
+    }
+
+    // Navigate one level: the entry at path[0] contains the rest
+    const head = path[0];
+    const entry = additions[head];
+    if (!entry || !Array.isArray(entry.fields)) return;
+
+    // Recurse into the entry's fields
+    removeFromAdditions(entry.fields, path.slice(1));
+
+    // Group → Simple back-conversion
+    // If the group now has zero fields and isn't dynamic, convert it back.
+    if (entry.fields.length === 0 && !entry.is_dynamic) {
+        const simpleField = {
+            name: entry.name,
             type: 'string',
-            hint: group.description || '',
+            hint: entry.description || '',
             extends_only: false,
         };
+        if (entry.secret) simpleField.secret = entry.secret;
+        additions[head] = simpleField;
     }
-
-    renderTFContainer(additions);
 }
 
 // #############################################
@@ -275,33 +352,105 @@ function handleTFRemoveSubField(button) {
 // #############################################
 
 /**
- * Bind tracked field addition events ONCE.
- * Delegated events on the container survive re-renders.
- * NEVER call this function again — it would accumulate handlers.
+ * Bind events for the TF additions editor.
+ * Delegated on the panel element — survives innerHTML re-renders
+ * because the panel and .ass-btf-container stay in the DOM.
+ * Must be called after the panel HTML is injected into the DOM.
+ *
+ * @param {string} panelSelector - CSS selector for the panel (e.g. '#ass-brain-panel')
  */
-export function bindTFAdditionEvents() {
-    const $container = $('#ass-brain-tf-additions');
+export function bindTFAdditionEvents(panelSelector = '') {
+    const panelId = panelSelector || '#ass-brain-panel';
+    const $panel = $(panelId);
+    if (!$panel.length) return;
 
-    // Add field (direct — button is outside the container)
-    $('#ass-brain-add-tf').on('click', handleTFAddField);
+    // Prevent double-binding
+    $panel.off('.ass-btf');
 
-    // Remove field (delegated)
-    $container.on('click', '.ass-btf-remove-field', function () {
-        handleTFRemoveField(this);
+    // --- Add field (top-level) ---
+    $panel.on('click.ass-btf', '#ass-brain-add-tf', function () {
+        const additions = readTFAdditionsFromUI(panelSelector);
+        additions.push({ name: '', type: 'string', hint: '', extends_only: false });
+        renderTFContainer(additions, panelSelector);
     });
 
-    // Convert simple to group (delegated)
-    $container.on('click', '.ass-btf-add-sub-to-field', function () {
-        handleTFConvertToGroup(this);
+    // --- Remove field (simple or group, any depth) ---
+    $panel.on('click.ass-btf', '.ass-btf-remove-field', function () {
+        const additions = readTFAdditionsFromUI(panelSelector);
+        const $field = $(this).closest('.ass-btf-field');
+        const path = buildFieldPath($field);
+
+        removeFromAdditions(additions, path);
+        renderTFContainer(additions, panelSelector);
     });
 
-    // Add sub-field to group (delegated)
-    $container.on('click', '.ass-btf-add-subfield', function () {
-        handleTFAddSubField(this);
+    // --- Add sub-field via sitemap (converts simple → group) ---
+    $panel.on('click.ass-btf', '.ass-btf-add-sub-to-field', function () {
+        const additions = readTFAdditionsFromUI(panelSelector);
+        const $field = $(this).closest('.ass-btf-field');
+        const path = buildFieldPath($field);
+        const entry = findEntryByPath(additions, path);
+        if (!entry) return;
+
+        if (isGroupEntry(entry)) {
+            // Already a group — just add a sub-field
+            entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false });
+        } else {
+            // Convert simple → group, preserving original as first sub-field
+            entry.fields = [{
+                name: 'sub_1',
+                type: entry.type || 'string',
+                hint: '',
+                extends_only: entry.extends_only || false,
+            }];
+            entry.description = entry.hint || '';
+            delete entry.type;
+            delete entry.hint;
+            delete entry.extends_only;
+        }
+        renderTFContainer(additions, panelSelector);
     });
 
-    // Remove sub-field (delegated)
-    $container.on('click', '.ass-btf-remove-subfield', function () {
-        handleTFRemoveSubField(this);
+    // --- Add sub-field inside a group ---
+    $panel.on('click.ass-btf', '.ass-btf-add-subfield', function () {
+        const additions = readTFAdditionsFromUI(panelSelector);
+        const $group = $(this).closest('.ass-btf-field');
+        const path = buildFieldPath($group);
+        const entry = findEntryByPath(additions, path);
+        if (!entry || !isGroupEntry(entry)) return;
+
+        entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false });
+        renderTFContainer(additions, panelSelector);
+    });
+
+    // --- Add sub-group inside a group ---
+    $panel.on('click.ass-btf', '.ass-btf-add-subgroup', function () {
+        const additions = readTFAdditionsFromUI(panelSelector);
+        const $group = $(this).closest('.ass-btf-field');
+        const path = buildFieldPath($group);
+        const entry = findEntryByPath(additions, path);
+        if (!entry) return;
+
+        if (!isGroupEntry(entry)) {
+            // Convert simple → group first
+            entry.fields = [{
+                name: 'sub_1',
+                type: entry.type || 'string',
+                hint: '',
+                extends_only: entry.extends_only || false,
+            }];
+            entry.description = entry.hint || '';
+            delete entry.type;
+            delete entry.hint;
+            delete entry.extends_only;
+        }
+
+        entry.fields.push({
+            name: '',
+            description: '',
+            is_dynamic: false,
+            fields: [],
+        });
+        renderTFContainer(additions, panelSelector);
     });
 }

@@ -1,0 +1,108 @@
+{
+    "setting": {
+        "fields": {
+            "location": {
+				"type": "string", "hint": "Starting/current location"
+			},
+            "time": {
+				"type": "string", "hint": "Starting/current time period"
+			},
+            "atmosphere": {
+				"type": "string", "hint": "Current mood/tone"
+			},
+            "environment": {
+				"type": "string", "hint": "Environmental features, weather, conditions"
+			}
+        }
+    },
+    "factions": {
+        "is_dynamic": true,
+        "hint": "Key each entry by faction name.",
+        "fields": {
+            "status": {
+				"type": "string", "hint": "Current state"
+			},
+            "goals": {
+				"type": "list", "hint": "What the faction wants"
+			},
+            "relationship_to_player": {
+				"type": "string", "hint": "How they view the player"
+			}
+        }
+    },
+    "plot": {
+        "fields": {
+            "active_quests": {
+				"type": "list", "hint": "Ongoing objectives"
+			},
+            "resolved_events": {
+				"type": "list", "hint": "Completed events"
+			},
+            "current_objective": {
+				"type": "string", "hint": "What the player should focus on"
+			},
+            "threats": {
+				"type": "list", "hint": "Immediate dangers"
+			}
+        }
+    },
+    "world_details": {
+        "fields": {
+            "rules": {
+				"type": "list", "hint": "Important world rules"
+			},
+            "customs": {
+				"type": "list", "hint": "Cultural practices"
+			},
+            "technology_level": {
+				"type": "string", "hint": "Tech/magic level"
+			},
+            "magic_system": {
+				"type": "string", "hint": "Magic rules or limitations"
+			}
+        }
+    },
+    "items": {
+        "fields": {
+            "acquired": {
+				"type": "list", "hint": "Items recently obtained"
+			},
+            "lost": {
+				"type": "list", "hint": "Items recently lost"
+			},
+            "mentioned": {
+				"type": "list", "hint": "Items referenced"
+			},
+            "key_items": {
+				"type": "list", "hint": "Plot-important items"
+			}
+        }
+    },
+    "characters": {
+        "is_dynamic": true,
+        "hint": "Key each entry by character name.",
+        "fields": {
+            "description": {
+				"type": "string", "hint": "Brief physical/personality description"
+			},
+            "role": {
+				"type": "string", "hint": "Their function in the story"
+			},
+            "location": {
+				"type": "string", "hint": "Where they currently are"
+			},
+            "disposition": {
+				"type": "string", "hint": "How they feel toward the player"
+			},
+            "first_seen": {
+				"type": "string", "hint": "When/where first encountered (only on first appearance)"
+			}
+        }
+    },
+    "events": {
+		"type": "list", "hint": "Notable narrative events"
+	},
+    "discoveries": {
+		"type": "dict", "hint": "Key-value pairs of new information"
+	}
+}

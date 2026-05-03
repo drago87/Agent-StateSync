@@ -8,7 +8,9 @@
 // Stored in extensionSettings, keyed by persona avatar filename.
 // Each persona gets its own independent overrides.
 //
-// File Version: 1.0.2
+// Supports nested sub-fields and secret marking.
+//
+// File Version: 2.0.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';
@@ -38,6 +40,7 @@ const DEFAULT_PERSONA_CONFIG = {
 
 /**
  * Migrate old object-format tracked_field_additions to new array format.
+ * Supports nested sub-groups and secret field.
  */
 function migrateTFAdditionsToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj || [];
@@ -47,12 +50,8 @@ function migrateTFAdditionsToArray(obj) {
                 name: name,
                 description: field.description || '',
                 is_dynamic: field.is_dynamic || false,
-                fields: Object.entries(field.fields || {}).map(([subName, subField]) => ({
-                    name: subName,
-                    type: subField.type || 'string',
-                    hint: subField.hint || '',
-                    extends_only: subField.extends_only || false,
-                })),
+                secret: field.secret || false,
+                fields: migrateTFAdditionsToArray(field.fields),
             };
         }
         return {
@@ -60,13 +59,14 @@ function migrateTFAdditionsToArray(obj) {
             type: field.type || 'string',
             hint: field.hint || '',
             extends_only: field.extends_only || false,
+            secret: field.secret || false,
         };
     });
 }
 
 /**
  * Convert array-format tracked_field_additions to object format
- * for the Agent init payload.
+ * for the Agent init payload. Supports arbitrary nesting and secret field.
  */
 function tfAdditionsArrayToObject(additions) {
     if (!Array.isArray(additions)) return additions || null;
@@ -78,27 +78,20 @@ function tfAdditionsArrayToObject(additions) {
         if (!name) continue;
 
         if (entry.fields !== undefined) {
-            const subFields = {};
-            for (const sub of (entry.fields || [])) {
-                const subName = sub.name || '';
-                if (!subName) continue;
-                subFields[subName] = {
-                    type: sub.type || 'string',
-                    hint: sub.hint || '',
-                    extends_only: sub.extends_only || false,
-                };
-            }
+            const subFields = tfAdditionsArrayToObject(entry.fields);
             obj[name] = {
                 description: entry.description || '',
                 is_dynamic: entry.is_dynamic || false,
-                fields: subFields,
+                fields: subFields || {},
             };
+            if (entry.secret) obj[name].secret = true;
         } else {
             obj[name] = {
                 type: entry.type || 'string',
                 hint: entry.hint || '',
                 extends_only: entry.extends_only || false,
             };
+            if (entry.secret) obj[name].secret = true;
         }
     }
     return Object.keys(obj).length > 0 ? obj : null;
@@ -108,10 +101,6 @@ function tfAdditionsArrayToObject(additions) {
 // # Persona Identification
 // #############################################
 
-/**
- * Find the avatar filename of the currently active persona.
- * Matches by description first (unique), then by name.
- */
 function getCurrentPersonaAvatar() {
     const pu = state.context.powerUserSettings;
     if (!pu) return null;
@@ -123,14 +112,12 @@ function getCurrentPersonaAvatar() {
 
     const descs = pu.persona_descriptions || {};
 
-    // Match by description (most reliable — descriptions are usually unique)
     if (currentDesc) {
         for (const [avatar, data] of Object.entries(descs)) {
             if (data.description === currentDesc) return avatar;
         }
     }
 
-    // Fallback: match by name
     if (currentName) {
         const personas = pu.personas || {};
         for (const [avatar, name] of Object.entries(personas)) {
@@ -141,9 +128,6 @@ function getCurrentPersonaAvatar() {
     return null;
 }
 
-/**
- * Get a human-readable label for the current persona.
- */
 function getCurrentPersonaLabel() {
     return state.context.name1 || 'Unknown Persona';
 }
@@ -152,10 +136,6 @@ function getCurrentPersonaLabel() {
 // # Config Read / Write
 // #############################################
 
-/**
- * Read the stored persona config for the active persona.
- * Returns a validated copy, or the defaults.
- */
 function readPersonaConfig() {
     const avatar = getCurrentPersonaAvatar();
     if (!avatar) {
@@ -169,7 +149,6 @@ function readPersonaConfig() {
         return { ...DEFAULT_PERSONA_CONFIG, prompt_settings_override: {}, tracked_field_additions: [] };
     }
 
-    // Migrate tracked_field_additions from object to array format if needed
     let tfAdditions = stored.tracked_field_additions;
     if (tfAdditions && !Array.isArray(tfAdditions) && typeof tfAdditions === 'object') {
         tfAdditions = migrateTFAdditionsToArray(tfAdditions);
@@ -183,9 +162,6 @@ function readPersonaConfig() {
     };
 }
 
-/**
- * Write persona config for the active persona to extensionSettings.
- */
 function writePersonaConfig(config) {
     const avatar = getCurrentPersonaAvatar();
     if (!avatar) {
@@ -218,7 +194,6 @@ function injectPersonaCSS() {
 
     const css = `
     <style id="ass-persona-css">
-        /* Persona brain button */
         #ass-persona-btn {
             cursor: pointer;
             color: var(--fg_dim);
@@ -228,7 +203,6 @@ function injectPersonaCSS() {
             color: #9b59b6;
         }
 
-        /* Overlay and panel reuse the same classes as char-config */
         .ass-persona-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -273,7 +247,6 @@ function injectPersonaBrainButton() {
         return;
     }
 
-    // ST not ready yet — retry
     setTimeout(injectPersonaBrainButton, 1000);
 }
 
@@ -327,9 +300,7 @@ function openPersonaConfigPanel() {
                 <div class="ass-brain-section-title">
                     <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
                 </div>
-                <div id="ass-brain-tf-additions">
-                    ${renderTFAdditions(config.tracked_field_additions)}
-                </div>
+                ${renderTFAdditions(config.tracked_field_additions, { allowSecret: true })}
                 <div style="margin-top:6px;">
                     <button id="ass-brain-add-tf" class="menu_button" type="button">
                         <i class="fa-solid fa-plus"></i> Add Field
@@ -337,7 +308,8 @@ function openPersonaConfigPanel() {
                 </div>
                 <div class="ass-brain-info">
                     Add persona-specific fields to track in the state database.<br>
-                    These are merged with the global tracked fields when sending to the Agent.
+                    These are merged with the global tracked fields when sending to the Agent.<br>
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat.
                 </div>
             </div>
 
@@ -347,27 +319,16 @@ function openPersonaConfigPanel() {
     $('body').append(html);
 
     // --- Bind events ---
-
-    // Close button
     $('#ass-persona-close').on('click', closePersonaConfigPanel);
-
-    // Click outside panel to close
     $('#ass-persona-overlay').on('mousedown', function (e) {
-        if ($(e.target).is('#ass-persona-overlay')) {
-            closePersonaConfigPanel();
-        }
+        if ($(e.target).is('#ass-persona-overlay')) closePersonaConfigPanel();
     });
-
-    // Escape key to close
     $(document).on('keydown.persona-panel', function (e) {
         if (e.key === 'Escape') closePersonaConfigPanel();
     });
 
-    // Bind prompt override events
     bindCharPromptOverrideEvents('#ass-persona-panel');
-
-    // Bind tracked field addition events (handles Add Field, Add Sub-field, etc.)
-    bindTFAdditionEvents();
+    bindTFAdditionEvents('#ass-persona-panel');
 }
 
 function closePersonaConfigPanel() {
@@ -382,7 +343,7 @@ function closePersonaConfigPanel() {
 function readCurrentPersonaConfig() {
     return {
         prompt_settings_override: readCharPromptOverridesFromUI('#ass-persona-panel'),
-        tracked_field_additions: readTFAdditionsFromUI(),
+        tracked_field_additions: readTFAdditionsFromUI('#ass-persona-panel'),
     };
 }
 

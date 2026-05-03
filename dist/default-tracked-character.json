@@ -1,0 +1,122 @@
+{
+    "physical": {
+        "description": "Physical state of the character",
+        "fields": {
+            "health": {
+				"type": "string", "hint": "Overall health status (e.g. healthy, exhausted, bleeding from left arm)"
+			},
+            "appearance": {
+				"type": "string", "hint": "Current appearance or notable changes to it"
+			},
+            "position": {
+				"type": "string", "hint": "Body posture or physical position (e.g. kneeling, sprawled)"
+			},
+            "clothing": {
+				"type": "string_or_list", "hint": "Current outfit or changes to it"
+			},
+            "virginity": {
+				"type": "string", "hint": "Status if narratively relevant (intact or lost)"
+			}
+        }
+    },
+    "sexuality": {
+        "description": "Sexual preferences and discoveries",
+        "fields": {
+            "known_kinks": {
+				"type": "list", "hint": "Kinks the character is aware they have"
+			},
+            "hidden_kinks": {
+				"type": "list", "hint": "Kinks discovered through positive reaction ONLY. Be EXTREMELY conservative."
+			}
+        }
+    },
+    "location": {
+        "description": "Where the character is",
+        "fields": {
+            "current": {
+				"type": "string", "hint": "Where the character is right now"
+			},
+            "prev": {
+				"type": "string", "hint": "Where they were before (only if they moved)"
+			}
+        }
+    },
+    "emotional": {
+        "description": "Emotional and mental state",
+        "fields": {
+            "mood": {
+				"type": "string", "hint": "Current emotional state (e.g. furious, melancholic)"
+			},
+            "mental_state": {
+				"type": "string", "hint": "Cognitive condition (e.g. intoxicated, sleep-deprived)"
+			},
+            "attitude": {
+				"type": "string", "hint": "Disposition toward others or the situation"
+			},
+            "stress": {
+				"type": "string", "hint": "low, medium, high, breaking"
+			}
+        }
+    },
+    "equipment": {
+        "description": "Items the character carries",
+        "fields": {
+            "weapons": {
+				"type": "list", "hint": "Weapons carried"
+			},
+            "armor": {
+				"type": "list", "hint": "Armor or protective gear"
+			},
+            "tools": {
+				"type": "list", "hint": "Tools or utility items"
+			},
+            "other": {
+				"type": "list", "hint": "Notable personal items"
+			}
+        }
+    },
+    "relationships": {
+        "description": "Relationships with other characters",
+        "is_dynamic": true,
+        "hint": "Key each entry by the OTHER character's name.",
+        "fields": {
+            "family_type": {
+				"type": "string", "hint": "family, friend, rival, lover, enemy, ally, acquaintance, stranger, master, servant, mentor, student"
+			},
+            "status": {
+				"type": "string", "hint": "Current state of the relationship"
+			},
+            "note": {
+				"type": "string", "hint": "Brief reason or context (optional)"
+			}
+        }
+    },
+    "knowledge": {
+        "description": "What the character knows or suspects",
+        "fields": {
+            "known_facts": {
+				"type": "list", "hint": "Facts the character learned"
+			},
+            "suspicions": {
+				"type": "list", "hint": "Things suspected but unconfirmed"
+				},
+            "secrets": {
+				"type": "list", "hint": "Secrets the character is keeping"
+			}
+        }
+    },
+    "active_effects": {
+        "description": "Active buffs, debuffs, and temporary states",
+        "fields": {
+            "buffs": {
+				"type": "list", "hint": "Active positive effects"
+			},
+            "debuffs": {
+				"type": "list", "hint": "Active negative effects"
+			},
+            "temporary": {
+				"type": "list", "hint": "Temporary states with context"
+			}
+        }
+    }
+}

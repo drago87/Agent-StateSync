@@ -1,0 +1,20 @@
+{
+	"location": {
+		"type": "string", "hint": "Current primary location"
+	},
+	"time": {
+		"type": "string", "hint": "Time of day, date, or time passage"
+	},
+	"atmosphere": {
+		"type": "string", "hint": "Current mood/tone of the scene"
+	},
+	"items": {
+		"type": "dict", "hint": "Items in the environment (dict with acquired, lost, mentioned)"
+	},
+	"discoveries": {
+		"type": "dict", "hint": "New information about the world"
+	},
+	"events": {
+		"type": "list", "hint": "Notable events that occurred"
+	}
+}

@@ -11,10 +11,12 @@
 //   - Database Tracked Fields Additions (via brain-tf-additions.js)
 //
 // tracked_field_additions uses ARRAY storage format (v2):
-//   [{ name: "FieldName", type, hint, extends_only }, ...]
+//   [{ name: "FieldName", type, hint, extends_only, secret }, ...]
 //   Arrays replace entirely on merge — no ghost fields after F5.
 //
-// File Version: 1.5.1
+// Supports nested sub-fields and secret marking.
+//
+// File Version: 2.0.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -53,13 +55,10 @@ let panelCharId = null;
  * are always unique (Belle.png, Belle_1.png, etc.).
  */
 function findCharIdByAvatar() {
-    // Try to find the avatar from any available source
     let avatarImg = null;
 
-    // Source 1: SillyTavern character sheet avatar
     avatarImg = document.querySelector('#avatar_div img, #avatar_div .avatar img');
 
-    // Source 2: Brain panel avatar (if panel already open, e.g. after panel re-render)
     if (!avatarImg?.src) {
         const panelThumb = $('#ass-brain-avatar-preview img').first();
         if (panelThumb.length && panelThumb.attr('src')) {
@@ -67,15 +66,12 @@ function findCharIdByAvatar() {
         }
     }
 
-    if (!avatarImg?.src) {
-        return null;
-    }
+    if (!avatarImg?.src) return null;
 
     try {
         const url = new URL(avatarImg.src);
         const file = url.searchParams.get('file');
         if (!file) return null;
-
         if (!state.context.characters) return null;
         for (const [id, char] of Object.entries(state.context.characters)) {
             if (char.avatar === file) return id;
@@ -93,24 +89,19 @@ function findCharIdByAvatar() {
 /**
  * Migrate old object-format tracked_field_additions to new array format.
  * Old: { "FieldName": { type, hint, extends_only } }
- * New: [{ name: "FieldName", type, hint, extends_only }]
- * Also migrates group sub-fields from object to array.
+ * New: [{ name: "FieldName", type, hint, extends_only, secret }]
+ * Also migrates group sub-fields from object to array, with nesting.
  */
 function migrateTFAdditionsToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj || [];
     return Object.entries(obj).map(([name, field]) => {
         if (field && field.fields !== undefined) {
-            // Group field — migrate sub-fields too
             return {
                 name: name,
                 description: field.description || '',
                 is_dynamic: field.is_dynamic || false,
-                fields: Object.entries(field.fields || {}).map(([subName, subField]) => ({
-                    name: subName,
-                    type: subField.type || 'string',
-                    hint: subField.hint || '',
-                    extends_only: subField.extends_only || false,
-                })),
+                secret: field.secret || false,
+                fields: migrateTFAdditionsToArray(field.fields),
             };
         }
         return {
@@ -118,13 +109,14 @@ function migrateTFAdditionsToArray(obj) {
             type: field.type || 'string',
             hint: field.hint || '',
             extends_only: field.extends_only || false,
+            secret: field.secret || false,
         };
     });
 }
 
 /**
  * Convert array-format tracked_field_additions to object format
- * for the Agent init payload.
+ * for the Agent init payload. Supports arbitrary nesting and secret field.
  * Array: [{ name: "X", ... }, ...]
  * Object: { "X": { ... } }
  */
@@ -138,28 +130,21 @@ function tfAdditionsArrayToObject(additions) {
         if (!name) continue;
 
         if (entry.fields !== undefined) {
-            // Group
-            const subFields = {};
-            for (const sub of (entry.fields || [])) {
-                const subName = sub.name || '';
-                if (!subName) continue;
-                subFields[subName] = {
-                    type: sub.type || 'string',
-                    hint: sub.hint || '',
-                    extends_only: sub.extends_only || false,
-                };
-            }
+            // Group — recursively convert sub-fields
+            const subFields = tfAdditionsArrayToObject(entry.fields);
             obj[name] = {
                 description: entry.description || '',
                 is_dynamic: entry.is_dynamic || false,
-                fields: subFields,
+                fields: subFields || {},
             };
+            if (entry.secret) obj[name].secret = true;
         } else {
             obj[name] = {
                 type: entry.type || 'string',
                 hint: entry.hint || '',
                 extends_only: entry.extends_only || false,
             };
+            if (entry.secret) obj[name].secret = true;
         }
     }
     return Object.keys(obj).length > 0 ? obj : null;
@@ -204,11 +189,6 @@ function readCharConfig() {
 /**
  * Write the character config to the active character's card data
  * and persist to the character file.
- *
- * IMPORTANT: We use a single merge-attributes call (no null step).
- * The tracked_field_additions is stored as an ARRAY, and arrays
- * replace entirely on deep merge — so removed/renamed fields are
- * handled correctly without needing a null-then-write two-step.
  */
 function writeCharConfig(config) {
     const charId = panelCharId ?? state.context.characterId;
@@ -228,12 +208,10 @@ function writeCharConfig(config) {
             : [],
     };
 
-    // Write to in-memory object (keeps it available without reload)
     if (!char.data) char.data = {};
     if (!char.data.extensions) char.data.extensions = {};
     char.data.extensions[CHAR_CONFIG_EXT_KEY] = configData;
 
-    // Update ST's internal state (used by export/import, character editor, etc.)
     if (typeof state.context.writeExtensionField === 'function') {
         try {
             state.context.writeExtensionField(charId, CHAR_CONFIG_EXT_KEY, configData);
@@ -242,9 +220,6 @@ function writeCharConfig(config) {
         }
     }
 
-    // Persist to character card file via merge-attributes API.
-    // Arrays replace entirely on deep merge — no ghost fields.
-    // Single call, no null step needed.
     const avatar = char.avatar;
     if (!avatar) return;
 
@@ -306,7 +281,6 @@ export function getCharPromptOverrides() {
 
 /**
  * Get prompt config overrides for a specific character object.
- * Works in group mode where getActiveCharData() returns null.
  */
 export function getPromptOverridesForChar(charObj) {
     if (!charObj?.data?.extensions) return null;
@@ -337,7 +311,6 @@ export function getTrackedFieldAdditionsForChar(charObj) {
     if (!extData?.tracked_field_additions) return null;
 
     let additions = extData.tracked_field_additions;
-    // Migrate old object format on the fly
     if (!Array.isArray(additions) && typeof additions === 'object') {
         additions = migrateTFAdditionsToArray(additions);
     }
@@ -353,7 +326,7 @@ function injectBrainCSS() {
 
     const css = `
     <style id="ass-brain-css">
-        /* Brain button — matches ST's .character_menu_button style */
+        /* Brain button */
         #ass-brain-btn {
             cursor: pointer;
             padding: 0 8px;
@@ -434,7 +407,7 @@ function injectBrainCSS() {
             color: var(--fg);
         }
 
-        /* Section divider */
+        /* Section */
         .ass-brain-section {
             margin-bottom: 16px;
         }
@@ -508,7 +481,6 @@ function injectBrainCSS() {
             border-color: rgba(217, 83, 79, 0.5);
         }
 
-        /* Add button */
         #ass-brain-add-name {
             margin-top: 4px;
             font-size: 12px;
@@ -526,6 +498,10 @@ function injectBrainCSS() {
             background: rgba(92, 184, 92, 0.04);
             border-color: rgba(92, 184, 92, 0.18);
         }
+        .ass-btf-field.ass-btf-nested {
+            background: rgba(128, 128, 128, 0.04);
+            border-color: rgba(128, 128, 128, 0.12);
+        }
         .ass-btf-row {
             display: flex;
             align-items: center;
@@ -538,10 +514,9 @@ function injectBrainCSS() {
             padding-left: 10px;
             border-left: 2px solid rgba(128, 128, 128, 0.2);
         }
-        .ass-btf-subfield-row { margin-bottom: 4px; }
-        .ass-btf-subfield-row:last-child { margin-bottom: 0; }
         .ass-btf-extends-label,
-        .ass-btf-dyn-label {
+        .ass-btf-dyn-label,
+        .ass-btf-secret-label {
             display: flex;
             align-items: center;
             gap: 3px;
@@ -551,14 +526,17 @@ function injectBrainCSS() {
             white-space: nowrap;
             color: var(--fg_dim);
         }
+        .ass-btf-secret-label {
+            color: #9b59b6;
+        }
         .ass-btf-extends-label input,
-        .ass-btf-dyn-label input {
+        .ass-btf-dyn-label input,
+        .ass-btf-secret-label input {
             margin: 0;
             width: 14px;
             height: 14px;
         }
 
-        /* Info text */
         .ass-brain-info {
             font-size: 11px;
             color: var(--fg_dim);
@@ -580,7 +558,6 @@ function injectBrainButton() {
     const $btn = $('<div id="ass-brain-btn" title="Agent Character Config"><i class="fa-solid fa-brain"></i></div>');
     $btn.on('click', toggleCharConfigPanel);
 
-    // Primary target: avatar controls button bar
     const $bar = $('#avatar_controls .buttons_block');
     if ($bar.length) {
         $bar.append($btn);
@@ -588,7 +565,6 @@ function injectBrainButton() {
         return;
     }
 
-    // Fallback targets
     const targets = [
         '#entity_del',
         '#delete_character_button',
@@ -607,7 +583,6 @@ function injectBrainButton() {
         }
     }
 
-    // ST not ready yet — retry
     setTimeout(injectBrainButton, 1000);
 }
 
@@ -626,7 +601,6 @@ function toggleCharConfigPanel() {
 function openCharConfigPanel() {
     if ($('#ass-brain-overlay').length) return;
 
-    // Capture which character is being viewed
     panelCharId = findCharIdByAvatar() || state.context.characterId || null;
 
     const config = readCharConfig();
@@ -690,9 +664,7 @@ function openCharConfigPanel() {
                     <summary class="ass-brain-section-title">
                         <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
                     </summary>
-                    <div id="ass-brain-tf-additions">
-                        ${renderTFAdditions(config.tracked_field_additions)}
-                    </div>
+                    ${renderTFAdditions(config.tracked_field_additions, { allowSecret: true })}
                     <div style="margin-top:6px;">
                         <button id="ass-brain-add-tf" class="menu_button" type="button">
                             <i class="fa-solid fa-plus"></i> Add Field
@@ -700,7 +672,8 @@ function openCharConfigPanel() {
                     </div>
                     <div class="ass-brain-info">
                         Add character-specific fields to track in the state database.<br>
-                        These are merged with the global tracked fields when sending to the Agent.
+                        These are merged with the global tracked fields when sending to the Agent.<br>
+                        <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat.
                     </div>
                 </details>
             </div>
@@ -710,33 +683,22 @@ function openCharConfigPanel() {
 
     $('body').append(html);
 
-    // Render initial name inputs
     renderNameInputs(config.names);
 
     // --- Bind events ---
-
-    // Close button
     $('#ass-brain-close').on('click', closeCharConfigPanel);
-
-    // Click outside panel to close
     $('#ass-brain-overlay').on('mousedown', function (e) {
-        if ($(e.target).is('#ass-brain-overlay')) {
-            closeCharConfigPanel();
-        }
+        if ($(e.target).is('#ass-brain-overlay')) closeCharConfigPanel();
     });
-
-    // Escape key to close
     $(document).on('keydown.brain-panel', function (e) {
         if (e.key === 'Escape') closeCharConfigPanel();
     });
 
-    // Mode dropdown change
     $('#ass-brain-mode').on('change', function () {
         const mode = $(this).val();
         $('#ass-brain-names-section').toggle(mode === 'characters');
     });
 
-    // Add character button
     $('#ass-brain-add-name').on('click', function () {
         const config = readCurrentConfig();
         config.names.push('');
@@ -745,11 +707,8 @@ function openCharConfigPanel() {
         $inputs.last().focus();
     });
 
-    // Bind prompt override events (toggle visibility for Language Custom input)
     bindCharPromptOverrideEvents();
-
-    // Bind tracked field addition events
-    bindTFAdditionEvents();
+    bindTFAdditionEvents('#ass-brain-panel');
 }
 
 function closeCharConfigPanel() {
@@ -780,7 +739,7 @@ function readCurrentConfig() {
         mode,
         names,
         prompt_settings_override: readCharPromptOverridesFromUI(),
-        tracked_field_additions: readTFAdditionsFromUI(),
+        tracked_field_additions: readTFAdditionsFromUI('#ass-brain-panel'),
     };
 }
 
