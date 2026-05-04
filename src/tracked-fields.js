@@ -404,7 +404,10 @@ function syncFieldsFromDOM() {
         const $topFields = $container.find(`.ass-tf-field[data-category="${cat}"][data-depth="0"]`);
         currentFields[cat] = {};
         $topFields.each(function () {
-            const key = String($(this).attr('data-key'));
+            // Read the name from the input field (may have been edited),
+            // NOT from the stale data-key attribute.
+            const $name = $(this).find('> .ass-tf-row > .ass-tf-name');
+            const key = ($name.val() || '').trim() || String($(this).attr('data-key'));
             const field = readFieldFromDOM($(this));
             if (key) currentFields[cat][key] = field;
         });
@@ -437,7 +440,10 @@ function readFieldFromDOM($el) {
         if (immutable) result.immutable = true;
 
         $el.children('.ass-tf-subfields').children('.ass-tf-field').each(function () {
-            const subKey = String($(this).attr('data-key'));
+            // Read the name from the input field (may have been edited),
+            // NOT from the stale data-key attribute.
+            const $name = $(this).find('> .ass-tf-row > .ass-tf-name');
+            const subKey = ($name.val() || '').trim() || String($(this).attr('data-key'));
             if (subKey) result.fields[subKey] = readFieldFromDOM($(this));
         });
 

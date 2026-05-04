@@ -15,7 +15,7 @@ import {
 } from './settings.js';
 import { getCharInitType, getCharInitNames } from './char-config.js';
 import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions } from './persona-config.js';
-import defaultConfig from './default-config.js';
+import { getTrackedFieldsForPayload } from './tracked-fields.js';
 
 // #############################################
 // # Payload Helper Functions
@@ -297,9 +297,15 @@ function buildSingleCharInitPayload() {
         payload.persona = persona;
     }
 
-    // Global tracked_fields definition
-    if (defaultConfig?.tracked_fields) {
-        payload.tracked_fields = JSON.parse(JSON.stringify(defaultConfig.tracked_fields));
+    // Global tracked_fields definition (from STe settings)
+    const trackedFields = getTrackedFieldsForPayload();
+    if (trackedFields && typeof trackedFields === 'object') {
+        const hasContent = ['character', 'scenario', 'shared'].some(
+            cat => trackedFields[cat] && Object.keys(trackedFields[cat]).length > 0
+        );
+        if (hasContent) {
+            payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
+        }
     }
 
     // Global prompt_settings (merged with per-character + persona overrides)
@@ -399,9 +405,15 @@ function buildGroupInitPayload() {
         payload.persona = persona;
     }
 
-    // Global tracked_fields definition
-    if (defaultConfig?.tracked_fields) {
-        payload.tracked_fields = JSON.parse(JSON.stringify(defaultConfig.tracked_fields));
+    // Global tracked_fields definition (from STe settings)
+    const trackedFields = getTrackedFieldsForPayload();
+    if (trackedFields && typeof trackedFields === 'object') {
+        const hasContent = ['character', 'scenario', 'shared'].some(
+            cat => trackedFields[cat] && Object.keys(trackedFields[cat]).length > 0
+        );
+        if (hasContent) {
+            payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
+        }
     }
 
     // Global prompt_settings (merged with persona overrides)
