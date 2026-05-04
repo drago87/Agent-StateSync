@@ -301,9 +301,12 @@ function openPersonaConfigPanel() {
                     <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
                 </div>
                 ${renderTFAdditions(config.tracked_field_additions, { allowSecret: true })}
-                <div style="margin-top:6px;">
+                <div style="margin-top:6px; display:flex; gap:6px;">
                     <button id="ass-brain-add-tf" class="menu_button" type="button">
                         <i class="fa-solid fa-plus"></i> Add Field
+                    </button>
+                    <button id="ass-brain-add-tf-group" class="menu_button" type="button">
+                        <i class="fa-solid fa-folder-plus"></i> Add Group Field
                     </button>
                 </div>
                 <div class="ass-brain-info">

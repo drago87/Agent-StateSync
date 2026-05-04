@@ -100,11 +100,8 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
            </label>`
         : '';
 
-    const addSubBtn = !isNested
-        ? `<button class="menu_button ass-btf-add-sub-to-field" title="Add sub-field (converts to group)">
-               <i class="fa-solid fa-sitemap"></i>
-           </button>`
-        : '';
+    // No per-field convert button — top-level "Add field" and "Add group field"
+    // buttons handle the two creation paths instead.
 
     const depthClass = isNested ? 'ass-btf-nested' : '';
 
@@ -122,7 +119,6 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
                 <input type="checkbox" class="ass-btf-extends" ${extendsOnly ? 'checked' : ''}>
             </label>
             ${secretHtml}
-            ${addSubBtn}
             <button class="menu_button ass-btf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -384,30 +380,15 @@ export function bindTFAdditionEvents(panelSelector = '') {
         renderTFContainer(additions, panelSelector);
     });
 
-    // --- Add sub-field via sitemap (converts simple → group) ---
-    $panel.on('click.ass-btf', '.ass-btf-add-sub-to-field', function () {
+    // --- Add top-level group field ---
+    $panel.on('click.ass-btf', '#ass-brain-add-tf-group', function () {
         const additions = readTFAdditionsFromUI(panelSelector);
-        const $field = $(this).closest('.ass-btf-field');
-        const path = buildFieldPath($field);
-        const entry = findEntryByPath(additions, path);
-        if (!entry) return;
-
-        if (isGroupEntry(entry)) {
-            // Already a group — just add a sub-field
-            entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false });
-        } else {
-            // Convert simple → group, preserving original as first sub-field
-            entry.fields = [{
-                name: 'sub_1',
-                type: entry.type || 'string',
-                hint: '',
-                extends_only: entry.extends_only || false,
-            }];
-            entry.description = entry.hint || '';
-            delete entry.type;
-            delete entry.hint;
-            delete entry.extends_only;
-        }
+        additions.push({
+            name: '',
+            description: '',
+            is_dynamic: false,
+            fields: [],
+        });
         renderTFContainer(additions, panelSelector);
     });
 
@@ -431,14 +412,9 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const entry = findEntryByPath(additions, path);
         if (!entry) return;
 
+        // If not already a group, convert simple → group with empty fields
         if (!isGroupEntry(entry)) {
-            // Convert simple → group first
-            entry.fields = [{
-                name: 'sub_1',
-                type: entry.type || 'string',
-                hint: '',
-                extends_only: entry.extends_only || false,
-            }];
+            entry.fields = [];
             entry.description = entry.hint || '';
             delete entry.type;
             delete entry.hint;

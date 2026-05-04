@@ -527,12 +527,27 @@ async function loadDefaults(category) {
  * Returns null if the path can't be resolved.
  */
 function resolveField(parentObj, path) {
-    if (!path || !parentObj) return null;
+    if (!path || !parentObj) {
+        console.warn('[Agent-StateSync] resolveField: null input', { path, parentObj });
+        return null;
+    }
     const parts = path.split('.');
     let current = parentObj;
-    for (const part of parts) {
-        if (!current || typeof current !== 'object') return null;
-        current = current[part];
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (!current || typeof current !== 'object') {
+            console.warn(`[Agent-StateSync] resolveField: hit non-object at part[${i}]="${part}"`, { current, path });
+            return null;
+        }
+        // If current is a group (has .fields), navigate through it
+        if (current.fields !== undefined && typeof current.fields === 'object') {
+            current = current.fields[part];
+        } else {
+            current = current[part];
+        }
+    }
+    if (!current) {
+        console.warn(`[Agent-StateSync] resolveField: resolved to null/falsy for path "${path}"`);
     }
     return current;
 }
@@ -542,8 +557,14 @@ function resolveField(parentObj, path) {
  */
 function addSubFieldToGroup(category, path) {
     syncFieldsFromDOM();
+    console.log(`[Agent-StateSync] addSubFieldToGroup("${category}", "${path}")`);
+    console.log('[Agent-StateSync] currentFields[category]:', JSON.stringify(currentFields[category], null, 2));
     const group = resolveField(currentFields[category], path);
-    if (!group || !isGroup(group)) return;
+    console.log('[Agent-StateSync] resolved group:', JSON.stringify(group, null, 2));
+    if (!group || !isGroup(group)) {
+        console.warn(`[Agent-StateSync] addSubFieldToGroup: group not found or not a group`, { group, isGroup: isGroup(group) });
+        return;
+    }
 
     const subName = 'new_sub_' + Date.now();
     group.fields[subName] = { type: 'string', hint: '', extends_only: false };
@@ -558,8 +579,14 @@ function addSubFieldToGroup(category, path) {
  */
 function addSubGroup(category, path) {
     syncFieldsFromDOM();
+    console.log(`[Agent-StateSync] addSubGroup("${category}", "${path}")`);
+    console.log('[Agent-StateSync] currentFields[category]:', JSON.stringify(currentFields[category], null, 2));
     const group = resolveField(currentFields[category], path);
-    if (!group || !isGroup(group)) return;
+    console.log('[Agent-StateSync] resolved group:', JSON.stringify(group, null, 2));
+    if (!group || !isGroup(group)) {
+        console.warn(`[Agent-StateSync] addSubGroup: group not found or not a group`, { group, isGroup: isGroup(group) });
+        return;
+    }
 
     const subName = 'new_group_' + Date.now();
     group.fields[subName] = {
@@ -781,12 +808,18 @@ function bindModalEvents() {
 
     // Add sub-field to group
     $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
-        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-path'));
+        const cat = $(this).attr('data-category');
+        const path = $(this).attr('data-path');
+        console.log(`[Agent-StateSync] .ass-tf-add-subfield clicked: category="${cat}", path="${path}"`);
+        addSubFieldToGroup(cat, path);
     });
 
     // Add sub-group
     $modal.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
-        addSubGroup($(this).attr('data-category'), $(this).attr('data-path'));
+        const cat = $(this).attr('data-category');
+        const path = $(this).attr('data-path');
+        console.log(`[Agent-StateSync] .ass-tf-add-subgroup clicked: category="${cat}", path="${path}"`);
+        addSubGroup(cat, path);
     });
 }
 
