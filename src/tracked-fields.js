@@ -18,12 +18,15 @@
 // panel) so that the field rows have enough horizontal space for
 // all the inputs, checkboxes, and buttons.
 //
-// File Version: 3.1.0
+// File Version: 3.2.0
 
 import state from './state.js';
 
 // Settings key for user customizations
 const TRACKED_FIELDS_KEY = 'agent_statesync_tracked_fields';
+
+// Settings key for user-saved defaults (per-category overrides)
+const USER_DEFAULTS_KEY = 'agent_statesync_user_defaults';
 
 // Module-level: current fields (defaults merged with user edits)
 let currentFields = null;
@@ -244,8 +247,11 @@ function renderCategory({ key, label, open, allowSecret }) {
             <button class="menu_button ass-tf-add-group-field" data-category="${key}">
                 <i class="fa-solid fa-folder-plus"></i> Add group field
             </button>
-            <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults from ${label} JSON file">
+            <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults">
                 <i class="fa-solid fa-rotate-left"></i> Load Defaults
+            </button>
+            <button class="menu_button ass-tf-save-defaults" data-category="${key}" title="Save current fields as the default for this category">
+                <i class="fa-solid fa-floppy-disk"></i> Save as Default
             </button>
         </div>
     </details>`;
@@ -365,9 +371,9 @@ function buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable,
         <i class="fa-solid fa-asterisk"></i>
     </button>`;
 
-    // Immutable — field cannot be changed once set
+    // Immutable — will only be written during initialization
     html += `<button class="ass-tf-icon-toggle ass-tf-immutable-toggle ${immutable ? 'active' : ''}" 
-            title="Immutable — this field cannot be changed once set" type="button">
+            title="Immutable — will only be written during initialization" type="button">
         <i class="fa-solid fa-lock"></i>
     </button>`;
 
@@ -538,13 +544,27 @@ function addGroupField(category) {
 
 async function loadDefaults(category) {
     try {
+        // Confirmation popup — warn that current fields will be overwritten
+        const label = { character: 'Character', scenario: 'Scenario', shared: 'Shared' }[category] || category;
+        const confirmed = await showConfirmPopup(
+            `Load Defaults`,
+            `This will <b>replace</b> all current fields in the <b>${label}</b> category with the saved defaults.<br><br>Any edits you have made in this category will be lost. Continue?`
+        );
+        if (!confirmed) return;
+
         // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
         syncFieldsFromDOM();
 
-        // Load and replace this category entirely
-        const defaults = await loadDefaultCategory(category);
+        // Prefer user-saved defaults, fall back to JSON file defaults
+        let defaults = loadUserDefaultCategory(category);
+        let source = 'user defaults';
+        if (!defaults || Object.keys(defaults).length === 0) {
+            defaults = await loadDefaultCategory(category);
+            source = 'JSON file';
+        }
+
         const count = Object.keys(defaults).length;
-        console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from JSON`);
+        console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from ${source}`);
 
         if (count === 0) {
             const baseUrl = await getExtensionBaseUrl();
@@ -558,11 +578,103 @@ async function loadDefaults(category) {
         snapshotOpenCategories();
         renderAllCategories();
         scheduleSave();
-        console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
+        console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}" (from ${source})`);
     } catch (err) {
         console.error(`[Agent-StateSync] loadDefaults("${category}") error:`, err);
         toastr.error(`Error loading defaults: ${err.message}`, 'Agent-StateSync');
     }
+}
+
+/**
+ * Save the current fields for a category as the user default.
+ * Stored in extensionSettings under USER_DEFAULTS_KEY.
+ * Load Defaults will prefer these over the JSON file defaults.
+ */
+function saveAsDefault(category) {
+    syncFieldsFromDOM();
+
+    const label = { character: 'Character', scenario: 'Scenario', shared: 'Shared' }[category] || category;
+    const fields = currentFields[category] || {};
+    const count = Object.keys(fields).length;
+
+    if (count === 0) {
+        toastr.warning(`Cannot save defaults for ${label} — category is empty.`, 'Agent-StateSync');
+        return;
+    }
+
+    // Persist to extensionSettings
+    if (!state.context.extensionSettings) state.context.extensionSettings = {};
+    const userDefaults = state.context.extensionSettings[USER_DEFAULTS_KEY] || {};
+    userDefaults[category] = JSON.parse(JSON.stringify(fields));
+    state.context.extensionSettings[USER_DEFAULTS_KEY] = userDefaults;
+    state.context.saveSettingsDebounced();
+
+    console.log(`[Agent-StateSync] Saved user defaults for "${category}" (${count} fields)`);
+    toastr.success(`Saved ${count} fields as default for ${label}.`, 'Agent-StateSync');
+}
+
+/**
+ * Load user-saved defaults for a specific category.
+ * Returns a deep-cloned copy, or null if no user defaults exist.
+ */
+function loadUserDefaultCategory(category) {
+    const userDefaults = state.context.extensionSettings?.[USER_DEFAULTS_KEY];
+    if (!userDefaults || !userDefaults[category]) return null;
+    return JSON.parse(JSON.stringify(userDefaults[category]));
+}
+
+/**
+ * Show a confirmation popup with OK/Cancel.
+ * Returns a Promise that resolves to true (OK) or false (Cancel).
+ */
+function showConfirmPopup(title, messageHtml) {
+    return new Promise(resolve => {
+        const popupId = 'ass-tf-confirm-' + Date.now();
+        const html = `
+        <div id="${popupId}" class="ass-tf-confirm-overlay" style="
+            position:fixed; top:0; left:0; right:0; bottom:0;
+            background:rgba(0,0,0,0.5); z-index:10001;
+            display:flex; align-items:center; justify-content:center;
+            animation:ass-tf-fade-in 0.15s ease-out;">
+            <div style="
+                background:var(--SmartThemeBlurTintColor, rgba(25,25,35,0.97));
+                border:1px solid rgba(128,128,128,0.3);
+                border-radius:10px; padding:20px; max-width:420px; width:90vw;
+                box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+                <h4 style="margin:0 0 12px 0; font-size:14px; color:var(--fg);">
+                    <i class="fa-solid fa-triangle-exclamation" style="color:#f0ad4e;"></i> ${title}
+                </h4>
+                <div style="font-size:13px; color:var(--fg_dim); margin-bottom:16px; line-height:1.6;">
+                    ${messageHtml}
+                </div>
+                <div style="display:flex; gap:8px; justify-content:flex-end;">
+                    <button class="menu_button ass-tf-confirm-cancel" type="button">Cancel</button>
+                    <button class="menu_button ass-tf-confirm-ok" type="button" style="
+                        background:rgba(217,83,79,0.15); border-color:rgba(217,83,79,0.4); color:#d9534f;">
+                        OK
+                    </button>
+                </div>
+            </div>
+        </div>`;
+
+        $('body').append(html);
+        const $popup = $(`#${popupId}`);
+
+        $popup.find('.ass-tf-confirm-ok').on('click', () => {
+            $popup.remove();
+            resolve(true);
+        });
+        $popup.find('.ass-tf-confirm-cancel').on('click', () => {
+            $popup.remove();
+            resolve(false);
+        });
+        $popup.on('mousedown', function (e) {
+            if ($(e.target).is(`#${popupId}`)) {
+                $popup.remove();
+                resolve(false);
+            }
+        });
+    });
 }
 
 /**
@@ -707,7 +819,7 @@ function openTFModal() {
                     &nbsp;&nbsp;
                     <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> <b>Required</b> — this field must be filled in.
                     &nbsp;&nbsp;
-                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — cannot be changed once set.
+                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — will only be written during initialization.
                     &nbsp;&nbsp;
                     <i class="fa-solid fa-code-merge" style="color:#3498db;"></i> <b>Extend</b> — only adds to this field, never overwrites.
                     &nbsp;&nbsp;
@@ -829,8 +941,18 @@ function bindModalEvents() {
 
     // Load defaults
     $modal.on('click.ass-tf', '.ass-tf-load-defaults', async function () {
+        await loadDefaults($(this).attr('data-category'));
+    });
+
+    // Save as default
+    $modal.on('click.ass-tf', '.ass-tf-save-defaults', async function () {
         const category = $(this).attr('data-category');
-        await loadDefaults(category);
+        const label = { character: 'Character', scenario: 'Scenario', shared: 'Shared' }[category] || category;
+        const confirmed = await showConfirmPopup(
+            `Save as Default`,
+            `This will <b>overwrite</b> the saved defaults for the <b>${label}</b> category with your current fields.<br><br>Future "Load Defaults" will use these instead of the extension's built-in defaults. Continue?`
+        );
+        if (confirmed) saveAsDefault(category);
     });
 
     // Remove field (any depth)
@@ -905,7 +1027,7 @@ function injectCSS() {
         background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
         border: 1px solid rgba(128, 128, 128, 0.3);
         border-radius: 10px;
-        width: 820px;
+        width: 1000px;
         max-width: 95vw;
         max-height: 85vh;
         overflow-y: auto;
@@ -1083,6 +1205,19 @@ function injectCSS() {
     }
     .ass-tf-load-defaults:hover {
         opacity: 1;
+    }
+
+    /* Save as default button */
+    .ass-tf-save-defaults {
+        opacity: 0.7;
+    }
+    .ass-tf-save-defaults:hover {
+        opacity: 1;
+    }
+
+    /* Category actions — allow wrapping */
+    .ass-tf-category-actions {
+        flex-wrap: wrap;
     }
     </style>`;
 

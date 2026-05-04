@@ -187,9 +187,9 @@ function buildBtfIconToggles({ secret, extendsOnly, isDynamic, required, immutab
         <i class="fa-solid fa-asterisk"></i>
     </button>`;
 
-    // Immutable — field cannot be changed once set
+    // Immutable — will only be written during initialization
     html += `<button class="ass-btf-icon-toggle ass-btf-immutable-toggle ${immutable ? 'active' : ''}" 
-            title="Immutable — this field cannot be changed once set" type="button">
+            title="Immutable — will only be written during initialization" type="button">
         <i class="fa-solid fa-lock"></i>
     </button>`;
 

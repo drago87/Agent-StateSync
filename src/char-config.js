@@ -375,8 +375,8 @@ function injectBrainCSS() {
             background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
             border: 1px solid rgba(128, 128, 128, 0.3);
             border-radius: 10px;
-            width: 480px;
-            max-width: 90vw;
+            width: 780px;
+            max-width: 92vw;
             max-height: 85vh;
             overflow-y: auto;
             padding: 20px;
@@ -706,7 +706,7 @@ function openCharConfigPanel() {
                         &nbsp;&nbsp;
                         <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> <b>Required</b> — this field must be filled in.
                         &nbsp;&nbsp;
-                        <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — cannot be changed once set.
+                        <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — will only be written during initialization.
                         &nbsp;&nbsp;
                         <i class="fa-solid fa-code-merge" style="color:#3498db;"></i> <b>Extend</b> — only adds to this field, never overwrites.
                         &nbsp;&nbsp;
