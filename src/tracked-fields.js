@@ -4,7 +4,7 @@
 // Three categories: character, scenario, shared.
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Sub-fields can themselves be groups (nested to arbitrary depth).
-// Character fields support a "secret" checkbox for privacy marking.
+// Five icon toggle buttons: Secret, Required, Immutable, Extend, Dynamic.
 //
 // Defaults loaded from external JSON files in the extension root:
 //   - default-tracked-character.json
@@ -18,7 +18,7 @@
 // panel) so that the field rows have enough horizontal space for
 // all the inputs, checkboxes, and buttons.
 //
-// File Version: 3.0.0
+// File Version: 3.1.0
 
 import state from './state.js';
 
@@ -266,17 +266,14 @@ function renderSimpleField(category, key, field, depth, path, allowSecret) {
     const type = field.type || 'string';
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
+    const isDynamic = field.is_dynamic || false;
     const secret = field.secret || false;
+    const required = field.required || false;
+    const immutable = field.immutable || false;
     const isNested = depth > 0;
 
-    const secretHtml = allowSecret
-        ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash"></i>
-           </label>`
-        : '';
-
     const depthClass = isNested ? 'ass-tf-nested' : '';
+    const togglesHtml = buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret });
 
     return `
     <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${escapeAttr(path)}">
@@ -288,10 +285,7 @@ function renderSimpleField(category, key, field, depth, path, allowSecret) {
             <select class="text_pole ass-tf-type">
                 ${buildTypeOptions(type)}
             </select>
-            <label class="ass-tf-extends-label" title="Only extends this and will not overwrite">
-                <input type="checkbox" class="ass-tf-extends" ${extendsOnly ? 'checked' : ''}>
-            </label>
-            ${secretHtml}
+            ${togglesHtml}
             <button class="menu_button ass-tf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -302,15 +296,13 @@ function renderSimpleField(category, key, field, depth, path, allowSecret) {
 function renderGroupField(category, key, field, depth, path, allowSecret) {
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
+    const extendsOnly = field.extends_only || false;
     const fields = field.fields || {};
     const secret = field.secret || false;
+    const required = field.required || false;
+    const immutable = field.immutable || false;
 
-    const secretHtml = allowSecret
-        ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash"></i>
-           </label>`
-        : '';
+    const togglesHtml = buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret });
 
     let subfieldsHtml = '';
     for (const [subKey, subField] of Object.entries(fields)) {
@@ -325,11 +317,7 @@ function renderGroupField(category, key, field, depth, path, allowSecret) {
                    placeholder="Group name">
             <input class="text_pole ass-tf-desc" value="${escapeAttr(description)}"
                    placeholder="Description">
-            <label class="ass-tf-dyn-label" title="Dynamic — entries keyed by name">
-                <input type="checkbox" class="ass-tf-dynamic" ${isDynamic ? 'checked' : ''}>
-                <small>Dyn</small>
-            </label>
-            ${secretHtml}
+            ${togglesHtml}
             <button class="menu_button ass-tf-remove-field" title="Remove group">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -352,6 +340,50 @@ function renderGroupField(category, key, field, depth, path, allowSecret) {
 
 function isGroup(field) {
     return field && field.fields !== undefined;
+}
+
+/**
+ * Build icon-only toggle buttons for a field row.
+ * Five toggles: Secret, Required, Immutable, Extend, Dynamic.
+ * All are available on both simple and group fields at any depth.
+ * Secret is only shown when allowSecret is true.
+ */
+function buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret }) {
+    let html = '';
+
+    // Secret — hidden from other characters in group chat
+    if (allowSecret) {
+        html += `<button class="ass-tf-icon-toggle ass-tf-secret-toggle ${secret ? 'active' : ''}" 
+                title="Secret — only sent to the character it belongs to" type="button">
+            <i class="fa-solid fa-eye-slash"></i>
+        </button>`;
+    }
+
+    // Required — field must be filled in
+    html += `<button class="ass-tf-icon-toggle ass-tf-required-toggle ${required ? 'active' : ''}" 
+            title="Required — this field must be filled in" type="button">
+        <i class="fa-solid fa-asterisk"></i>
+    </button>`;
+
+    // Immutable — field cannot be changed once set
+    html += `<button class="ass-tf-icon-toggle ass-tf-immutable-toggle ${immutable ? 'active' : ''}" 
+            title="Immutable — this field cannot be changed once set" type="button">
+        <i class="fa-solid fa-lock"></i>
+    </button>`;
+
+    // Extend — only adds to this field, never overwrites
+    html += `<button class="ass-tf-icon-toggle ass-tf-extend-toggle ${extendsOnly ? 'active' : ''}" 
+            title="Extend — only adds to this field, never overwrites" type="button">
+        <i class="fa-solid fa-code-merge"></i>
+    </button>`;
+
+    // Dynamic — creates per-character entries (e.g. relationships)
+    html += `<button class="ass-tf-icon-toggle ass-tf-dynamic-toggle ${isDynamic ? 'active' : ''}" 
+            title="Dynamic — creates per-character entries (e.g. relationships)" type="button">
+        <i class="fa-solid fa-diagram-project"></i>
+    </button>`;
+
+    return html;
 }
 
 // #############################################
@@ -384,17 +416,25 @@ function syncFieldsFromDOM() {
  * Recursively reads nested sub-fields.
  */
 function readFieldFromDOM($el) {
+    const $row = $el.find('> .ass-tf-row');
+
+    // Read icon toggle states
+    const secret = $row.find('> .ass-tf-secret-toggle').hasClass('active');
+    const required = $row.find('> .ass-tf-required-toggle').hasClass('active');
+    const immutable = $row.find('> .ass-tf-immutable-toggle').hasClass('active');
+    const extendsOnly = $row.find('> .ass-tf-extend-toggle').hasClass('active');
+    const isDynamic = $row.find('> .ass-tf-dynamic-toggle').hasClass('active');
+
     if ($el.hasClass('ass-tf-group')) {
         const result = {
-            description: ($el.find('> .ass-tf-row > .ass-tf-desc').val() || '').trim(),
-            is_dynamic: $el.find('> .ass-tf-row > .ass-tf-dynamic').is(':checked'),
+            description: ($row.find('> .ass-tf-desc').val() || '').trim(),
             fields: {},
         };
-
-        const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        if (isDynamic) result.is_dynamic = true;
+        if (extendsOnly) result.extends_only = true;
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         $el.children('.ass-tf-subfields').children('.ass-tf-field').each(function () {
             const subKey = String($(this).attr('data-key'));
@@ -404,15 +444,14 @@ function readFieldFromDOM($el) {
         return result;
     } else {
         const result = {
-            type: $el.find('> .ass-tf-row > .ass-tf-type').val() || 'string',
-            hint: ($el.find('> .ass-tf-row > .ass-tf-hint').val() || '').trim(),
-            extends_only: $el.find('> .ass-tf-row > .ass-tf-extends').is(':checked'),
+            type: $row.find('> .ass-tf-type').val() || 'string',
+            hint: ($row.find('> .ass-tf-hint').val() || '').trim(),
         };
-
-        const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        if (extendsOnly) result.extends_only = true;
+        if (isDynamic) result.is_dynamic = true;
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         return result;
     }
@@ -527,18 +566,12 @@ async function loadDefaults(category) {
  * Returns null if the path can't be resolved.
  */
 function resolveField(parentObj, path) {
-    if (!path || !parentObj) {
-        console.warn('[Agent-StateSync] resolveField: null input', { path, parentObj });
-        return null;
-    }
+    if (!path || !parentObj) return null;
     const parts = path.split('.');
     let current = parentObj;
     for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
-        if (!current || typeof current !== 'object') {
-            console.warn(`[Agent-StateSync] resolveField: hit non-object at part[${i}]="${part}"`, { current, path });
-            return null;
-        }
+        if (!current || typeof current !== 'object') return null;
         // If current is a group (has .fields), navigate through it
         if (current.fields !== undefined && typeof current.fields === 'object') {
             current = current.fields[part];
@@ -546,10 +579,7 @@ function resolveField(parentObj, path) {
             current = current[part];
         }
     }
-    if (!current) {
-        console.warn(`[Agent-StateSync] resolveField: resolved to null/falsy for path "${path}"`);
-    }
-    return current;
+    return current || null;
 }
 
 /**
@@ -557,14 +587,8 @@ function resolveField(parentObj, path) {
  */
 function addSubFieldToGroup(category, path) {
     syncFieldsFromDOM();
-    console.log(`[Agent-StateSync] addSubFieldToGroup("${category}", "${path}")`);
-    console.log('[Agent-StateSync] currentFields[category]:', JSON.stringify(currentFields[category], null, 2));
     const group = resolveField(currentFields[category], path);
-    console.log('[Agent-StateSync] resolved group:', JSON.stringify(group, null, 2));
-    if (!group || !isGroup(group)) {
-        console.warn(`[Agent-StateSync] addSubFieldToGroup: group not found or not a group`, { group, isGroup: isGroup(group) });
-        return;
-    }
+    if (!group || !isGroup(group)) return;
 
     const subName = 'new_sub_' + Date.now();
     group.fields[subName] = { type: 'string', hint: '', extends_only: false };
@@ -579,14 +603,8 @@ function addSubFieldToGroup(category, path) {
  */
 function addSubGroup(category, path) {
     syncFieldsFromDOM();
-    console.log(`[Agent-StateSync] addSubGroup("${category}", "${path}")`);
-    console.log('[Agent-StateSync] currentFields[category]:', JSON.stringify(currentFields[category], null, 2));
     const group = resolveField(currentFields[category], path);
-    console.log('[Agent-StateSync] resolved group:', JSON.stringify(group, null, 2));
-    if (!group || !isGroup(group)) {
-        console.warn(`[Agent-StateSync] addSubGroup: group not found or not a group`, { group, isGroup: isGroup(group) });
-        return;
-    }
+    if (!group || !isGroup(group)) return;
 
     const subName = 'new_group_' + Date.now();
     group.fields[subName] = {
@@ -679,7 +697,15 @@ function openTFModal() {
                     These are the global fields — per-character and per-persona additions
                     are configured in their respective brain panels.
                     <br><br>
-                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat (Character category only).
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> <b>Secret</b> — only sent to the character it belongs to (Character category only).
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> <b>Required</b> — this field must be filled in.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — cannot be changed once set.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-code-merge" style="color:#3498db;"></i> <b>Extend</b> — only adds to this field, never overwrites.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-diagram-project" style="color:#2ecc71;"></i> <b>Dynamic</b> — creates per-character entries (e.g. relationships).
                 </div>
             </div>
         </div>
@@ -776,8 +802,11 @@ function bindModalEvents() {
         scheduleSave();
     });
 
-    // Checkbox changes — live sync + save
-    $modal.on('change.ass-tf', '.ass-tf-extends, .ass-tf-dynamic, .ass-tf-secret', function () {
+    // Icon toggle clicks — toggle active class, sync + save
+    $modal.on('click.ass-tf', '.ass-tf-icon-toggle', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).toggleClass('active');
         syncFieldsFromDOM();
         scheduleSave();
     });
@@ -808,18 +837,12 @@ function bindModalEvents() {
 
     // Add sub-field to group
     $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
-        const cat = $(this).attr('data-category');
-        const path = $(this).attr('data-path');
-        console.log(`[Agent-StateSync] .ass-tf-add-subfield clicked: category="${cat}", path="${path}"`);
-        addSubFieldToGroup(cat, path);
+        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-path'));
     });
 
     // Add sub-group
     $modal.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
-        const cat = $(this).attr('data-category');
-        const path = $(this).attr('data-path');
-        console.log(`[Agent-StateSync] .ass-tf-add-subgroup clicked: category="${cat}", path="${path}"`);
-        addSubGroup(cat, path);
+        addSubGroup($(this).attr('data-category'), $(this).attr('data-path'));
     });
 }
 
@@ -1013,28 +1036,39 @@ function injectCSS() {
         gap: 6px;
     }
 
-    /* Checkbox labels */
-    .ass-tf-extends-label,
-    .ass-tf-dyn-label,
-    .ass-tf-secret-label {
-        display: flex;
-        align-items: center;
-        gap: 3px;
+    /* Icon toggle buttons */
+    .ass-tf-icon-toggle {
+        background: none;
+        border: none;
+        padding: 2px 4px;
         cursor: pointer;
-        flex-shrink: 0;
-        font-size: 12px;
-        white-space: nowrap;
         color: var(--fg_dim);
+        opacity: 0.35;
+        font-size: 13px;
+        transition: opacity 0.2s, color 0.2s;
+        flex-shrink: 0;
+        line-height: 1;
     }
-    .ass-tf-secret-label {
+    .ass-tf-icon-toggle:hover {
+        opacity: 0.7;
+    }
+    .ass-tf-icon-toggle.active {
+        opacity: 1;
+    }
+    .ass-tf-secret-toggle.active {
         color: #9b59b6;
     }
-    .ass-tf-secret-label input,
-    .ass-tf-extends-label input,
-    .ass-tf-dyn-label input {
-        margin: 0;
-        width: 14px;
-        height: 14px;
+    .ass-tf-required-toggle.active {
+        color: #e67e22;
+    }
+    .ass-tf-immutable-toggle.active {
+        color: #e74c3c;
+    }
+    .ass-tf-extend-toggle.active {
+        color: #3498db;
+    }
+    .ass-tf-dynamic-toggle.active {
+        color: #2ecc71;
     }
 
     /* Load defaults button */

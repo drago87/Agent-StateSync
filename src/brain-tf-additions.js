@@ -10,7 +10,7 @@
 //
 // Supports:
 //   - Arbitrary nested sub-fields (sub-fields can contain sub-groups)
-//   - Secret checkbox (marks fields as private for other characters)
+//   - Icon-only toggle buttons: Secret, Required, Immutable, Extend, Dynamic
 //   - Sub-groups (add nested group within a group)
 //   - Group→Simple back-conversion (when last sub-field removed)
 //
@@ -18,7 +18,7 @@
 // The .ass-btf-container element stays stable across re-renders
 // (only innerHTML changes), so delegated events survive.
 //
-// File Version: 2.1.0
+// File Version: 2.2.0
 
 // #############################################
 // # HTML Helpers
@@ -90,20 +90,14 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
     const type = entry.type || 'string';
     const hint = entry.hint || '';
     const extendsOnly = entry.extends_only || false;
+    const isDynamic = entry.is_dynamic || false;
     const secret = entry.secret || false;
+    const required = entry.required || false;
+    const immutable = entry.immutable || false;
     const isNested = depth > 0;
 
-    const secretHtml = allowSecret
-        ? `<label class="ass-btf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-btf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
-           </label>`
-        : '';
-
-    // No per-field convert button — top-level "Add field" and "Add group field"
-    // buttons handle the two creation paths instead.
-
     const depthClass = isNested ? 'ass-btf-nested' : '';
+    const togglesHtml = buildBtfIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret });
 
     return `
     <div class="ass-btf-field ${depthClass}" data-index="${index}" data-depth="${depth}">
@@ -115,10 +109,7 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
             <select class="text_pole ass-btf-type" style="flex:0 0 130px;">
                 ${buildTypeOptions(type)}
             </select>
-            <label class="ass-btf-extends-label" title="Only extends this and will not overwrite">
-                <input type="checkbox" class="ass-btf-extends" ${extendsOnly ? 'checked' : ''}>
-            </label>
-            ${secretHtml}
+            ${togglesHtml}
             <button class="menu_button ass-btf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -130,15 +121,13 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
     const name = entry.name || '';
     const description = entry.description || '';
     const isDynamic = entry.is_dynamic || false;
+    const extendsOnly = entry.extends_only || false;
     const secret = entry.secret || false;
+    const required = entry.required || false;
+    const immutable = entry.immutable || false;
     const fields = entry.fields || [];
 
-    const secretHtml = allowSecret
-        ? `<label class="ass-btf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-btf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
-           </label>`
-        : '';
+    const togglesHtml = buildBtfIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret });
 
     let subfieldsHtml = '';
     fields.forEach((subEntry, subIndex) => {
@@ -152,11 +141,7 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
                    placeholder="Group name" style="flex:1; min-width:0;">
             <input class="text_pole ass-btf-desc" value="${escapeAttr(description)}"
                    placeholder="Description" style="flex:3; min-width:0;">
-            <label class="ass-btf-dyn-label" title="Dynamic — entries keyed by name">
-                <input type="checkbox" class="ass-btf-dynamic" ${isDynamic ? 'checked' : ''}>
-                <small>Dyn</small>
-            </label>
-            ${secretHtml}
+            ${togglesHtml}
             <button class="menu_button ass-btf-remove-field" title="Remove group">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -177,6 +162,50 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
 
 function isGroupEntry(entry) {
     return entry && entry.fields !== undefined;
+}
+
+/**
+ * Build icon-only toggle buttons for an additions field row.
+ * Five toggles: Secret, Required, Immutable, Extend, Dynamic.
+ * All are available on both simple and group fields at any depth.
+ * Secret is only shown when allowSecret is true.
+ */
+function buildBtfIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret }) {
+    let html = '';
+
+    // Secret — hidden from other characters in group chat
+    if (allowSecret) {
+        html += `<button class="ass-btf-icon-toggle ass-btf-secret-toggle ${secret ? 'active' : ''}" 
+                title="Secret — only sent to the character it belongs to" type="button">
+            <i class="fa-solid fa-eye-slash"></i>
+        </button>`;
+    }
+
+    // Required — field must be filled in
+    html += `<button class="ass-btf-icon-toggle ass-btf-required-toggle ${required ? 'active' : ''}" 
+            title="Required — this field must be filled in" type="button">
+        <i class="fa-solid fa-asterisk"></i>
+    </button>`;
+
+    // Immutable — field cannot be changed once set
+    html += `<button class="ass-btf-icon-toggle ass-btf-immutable-toggle ${immutable ? 'active' : ''}" 
+            title="Immutable — this field cannot be changed once set" type="button">
+        <i class="fa-solid fa-lock"></i>
+    </button>`;
+
+    // Extend — only adds to this field, never overwrites
+    html += `<button class="ass-btf-icon-toggle ass-btf-extend-toggle ${extendsOnly ? 'active' : ''}" 
+            title="Extend — only adds to this field, never overwrites" type="button">
+        <i class="fa-solid fa-code-merge"></i>
+    </button>`;
+
+    // Dynamic — creates per-character entries (e.g. relationships)
+    html += `<button class="ass-btf-icon-toggle ass-btf-dynamic-toggle ${isDynamic ? 'active' : ''}" 
+            title="Dynamic — creates per-character entries (e.g. relationships)" type="button">
+        <i class="fa-solid fa-diagram-project"></i>
+    </button>`;
+
+    return html;
 }
 
 // #############################################
@@ -205,19 +234,26 @@ export function readTFAdditionsFromUI(panelSelector = '') {
  * Recursively reads nested sub-fields.
  */
 function readAdditionFieldFromDOM($el) {
+    const $row = $el.find('> .ass-btf-row');
+
+    // Read icon toggle states
+    const secret = $row.find('> .ass-btf-secret-toggle').hasClass('active');
+    const required = $row.find('> .ass-btf-required-toggle').hasClass('active');
+    const immutable = $row.find('> .ass-btf-immutable-toggle').hasClass('active');
+    const extendsOnly = $row.find('> .ass-btf-extend-toggle').hasClass('active');
+    const isDynamic = $row.find('> .ass-btf-dynamic-toggle').hasClass('active');
+
     if ($el.hasClass('ass-btf-group')) {
         const result = {
-            name: ($el.find('> .ass-btf-row > .ass-btf-name').val() || '').trim(),
-            description: ($el.find('> .ass-btf-row > .ass-btf-desc').val() || '').trim(),
-            is_dynamic: $el.find('> .ass-btf-row > .ass-btf-dynamic').is(':checked'),
+            name: ($row.find('> .ass-btf-name').val() || '').trim(),
+            description: ($row.find('> .ass-btf-desc').val() || '').trim(),
             fields: [],
         };
-
-        // Read secret
-        const $secret = $el.find('> .ass-btf-row > .ass-btf-secret-label > .ass-btf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        if (isDynamic) result.is_dynamic = true;
+        if (extendsOnly) result.extends_only = true;
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         // Read direct child fields
         $el.children('.ass-btf-subfields').children('.ass-btf-field').each(function () {
@@ -227,17 +263,15 @@ function readAdditionFieldFromDOM($el) {
         return result;
     } else {
         const result = {
-            name: ($el.find('> .ass-btf-row > .ass-btf-name').val() || '').trim(),
-            type: $el.find('> .ass-btf-row > .ass-btf-type').val() || 'string',
-            hint: ($el.find('> .ass-btf-row > .ass-btf-hint').val() || '').trim(),
-            extends_only: $el.find('> .ass-btf-row > .ass-btf-extends').is(':checked'),
+            name: ($row.find('> .ass-btf-name').val() || '').trim(),
+            type: $row.find('> .ass-btf-type').val() || 'string',
+            hint: ($row.find('> .ass-btf-hint').val() || '').trim(),
         };
-
-        // Read secret
-        const $secret = $el.find('> .ass-btf-row > .ass-btf-secret-label > .ass-btf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        if (extendsOnly) result.extends_only = true;
+        if (isDynamic) result.is_dynamic = true;
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         return result;
     }
@@ -336,8 +370,8 @@ function removeFromAdditions(additions, path) {
             name: entry.name,
             type: 'string',
             hint: entry.description || '',
-            extends_only: false,
         };
+        if (entry.extends_only) simpleField.extends_only = true;
         if (entry.secret) simpleField.secret = entry.secret;
         additions[head] = simpleField;
     }
@@ -362,6 +396,13 @@ export function bindTFAdditionEvents(panelSelector = '') {
 
     // Prevent double-binding
     $panel.off('.ass-btf');
+
+    // --- Icon toggle clicks ---
+    $panel.on('click.ass-btf', '.ass-btf-icon-toggle', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).toggleClass('active');
+    });
 
     // --- Add field (top-level) ---
     $panel.on('click.ass-btf', '#ass-brain-add-tf', function () {
@@ -400,7 +441,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const entry = findEntryByPath(additions, path);
         if (!entry || !isGroupEntry(entry)) return;
 
-        entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false });
+        entry.fields.push({ name: '', type: 'string', hint: '' });
         renderTFContainer(additions, panelSelector);
     });
 

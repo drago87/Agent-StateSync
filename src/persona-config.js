@@ -46,21 +46,29 @@ function migrateTFAdditionsToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj || [];
     return Object.entries(obj).map(([name, field]) => {
         if (field && field.fields !== undefined) {
-            return {
+            const group = {
                 name: name,
                 description: field.description || '',
                 is_dynamic: field.is_dynamic || false,
                 secret: field.secret || false,
                 fields: migrateTFAdditionsToArray(field.fields),
             };
+            if (field.extends_only) group.extends_only = true;
+            if (field.required) group.required = true;
+            if (field.immutable) group.immutable = true;
+            return group;
         }
-        return {
+        const simple = {
             name: name,
             type: field.type || 'string',
             hint: field.hint || '',
             extends_only: field.extends_only || false,
             secret: field.secret || false,
         };
+        if (field.is_dynamic) simple.is_dynamic = true;
+        if (field.required) simple.required = true;
+        if (field.immutable) simple.immutable = true;
+        return simple;
     });
 }
 
@@ -84,14 +92,20 @@ function tfAdditionsArrayToObject(additions) {
                 is_dynamic: entry.is_dynamic || false,
                 fields: subFields || {},
             };
+            if (entry.extends_only) obj[name].extends_only = true;
             if (entry.secret) obj[name].secret = true;
+            if (entry.required) obj[name].required = true;
+            if (entry.immutable) obj[name].immutable = true;
         } else {
             obj[name] = {
                 type: entry.type || 'string',
                 hint: entry.hint || '',
                 extends_only: entry.extends_only || false,
             };
+            if (entry.is_dynamic) obj[name].is_dynamic = true;
             if (entry.secret) obj[name].secret = true;
+            if (entry.required) obj[name].required = true;
+            if (entry.immutable) obj[name].immutable = true;
         }
     }
     return Object.keys(obj).length > 0 ? obj : null;
@@ -225,6 +239,41 @@ function injectPersonaCSS() {
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
             animation: ass-brain-slide-in 0.2s ease-out;
         }
+
+        /* Icon toggle buttons (for brain-tf-additions) */
+        .ass-btf-icon-toggle {
+            background: none;
+            border: none;
+            padding: 2px 4px;
+            cursor: pointer;
+            color: var(--fg_dim);
+            opacity: 0.35;
+            font-size: 13px;
+            transition: opacity 0.2s, color 0.2s;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+        .ass-btf-icon-toggle:hover {
+            opacity: 0.7;
+        }
+        .ass-btf-icon-toggle.active {
+            opacity: 1;
+        }
+        .ass-btf-secret-toggle.active {
+            color: #9b59b6;
+        }
+        .ass-btf-required-toggle.active {
+            color: #e67e22;
+        }
+        .ass-btf-immutable-toggle.active {
+            color: #e74c3c;
+        }
+        .ass-btf-extend-toggle.active {
+            color: #3498db;
+        }
+        .ass-btf-dynamic-toggle.active {
+            color: #2ecc71;
+        }
     </style>`;
 
     $('head').append(css);
@@ -312,7 +361,15 @@ function openPersonaConfigPanel() {
                 <div class="ass-brain-info">
                     Add persona-specific fields to track in the state database.<br>
                     These are merged with the global tracked fields when sending to the Agent.<br>
-                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat.
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> <b>Secret</b> — only sent to the character it belongs to.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> <b>Required</b> — this field must be filled in.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — cannot be changed once set.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-code-merge" style="color:#3498db;"></i> <b>Extend</b> — only adds to this field, never overwrites.
+                    &nbsp;&nbsp;
+                    <i class="fa-solid fa-diagram-project" style="color:#2ecc71;"></i> <b>Dynamic</b> — creates per-character entries (e.g. relationships).
                 </div>
             </div>
 
