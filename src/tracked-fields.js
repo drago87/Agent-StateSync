@@ -46,50 +46,15 @@ let _resolvedBaseUrl = null;
 
 /**
  * Resolve the extension's base URL (where default JSON files live).
- * Uses the same multi-strategy approach as index.js config.json loading.
- * Tries import.meta.url (which may point to dist/ subdir) and one level up,
- * then falls back to document.currentScript and script-tag scanning.
+ * Scans script tags for our extension's script to find the directory,
+ * then verifies the URL by probing for default-tracked-character.json.
  */
 async function getExtensionBaseUrl() {
     if (_resolvedBaseUrl) return _resolvedBaseUrl;
 
-    // Strategy 1: import.meta.url — try script dir AND one level up (dist/ vs root)
-    if (typeof import.meta !== 'undefined' && import.meta.url) {
-        try {
-            const metaUrl = new URL(import.meta.url);
-            const scriptDir = metaUrl.pathname.substring(0, metaUrl.pathname.lastIndexOf('/') + 1);
-            for (const dir of [scriptDir, `${scriptDir}../`]) {
-                const probeUrl = `${dir}default-tracked-character.json?_=${Date.now()}`;
-                const r = await fetch(probeUrl, { method: 'HEAD' });
-                if (r.ok) {
-                    console.log(`[Agent-StateSync] Base URL resolved via import.meta.url: ${dir}`);
-                    _resolvedBaseUrl = dir;
-                    return dir;
-                }
-            }
-        } catch (e) {
-            console.warn('[Agent-StateSync] import.meta.url strategy failed:', e.message);
-        }
-    }
-
-    // Strategy 2: document.currentScript (may not work in webpack bundles)
-    if (document.currentScript?.src) {
-        try {
-            const scriptSrc = document.currentScript.src;
-            const dir = scriptSrc.substring(0, scriptSrc.lastIndexOf('/') + 1);
-            const probeUrl = `${dir}default-tracked-character.json?_=${Date.now()}`;
-            const r = await fetch(probeUrl, { method: 'HEAD' });
-            if (r.ok) {
-                console.log(`[Agent-StateSync] Base URL resolved via document.currentScript: ${dir}`);
-                _resolvedBaseUrl = dir;
-                return dir;
-            }
-        } catch (e) {
-            console.warn('[Agent-StateSync] document.currentScript strategy failed:', e.message);
-        }
-    }
-
-    // Strategy 3: scan script tags for our extension
+    // Script tag scan — the only strategy that reliably works with
+    // SillyTavern's extension loading (import.meta.url may point to
+    // dist/ subdir, and document.currentScript is null in ES modules).
     try {
         const scripts = document.querySelectorAll('script[src]');
         for (const script of scripts) {
