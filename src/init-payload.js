@@ -14,7 +14,7 @@ import {
     buildPromptSettingsPayload,
 } from './settings.js';
 import { getCharInitType, getCharInitNames } from './char-config.js';
-import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions } from './persona-config.js';
+import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions, getPersonaType } from './persona-config.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
 
 // #############################################
@@ -62,6 +62,9 @@ function buildPersona() {
 
     const desc = state.context.powerUserSettings?.persona_description || '';
     if (desc) persona.description = desc;
+
+    // Persona type (character, narrator, system, observer)
+    persona.type = getPersonaType();
 
     // Per-persona tracked field additions
     const personaTFAdditions = getPersonaTrackedFieldAdditions();

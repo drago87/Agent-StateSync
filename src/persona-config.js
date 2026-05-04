@@ -30,9 +30,38 @@ import {
 const PERSONA_CONFIG_KEY = 'agent_statesync_persona_configs';
 
 const DEFAULT_PERSONA_CONFIG = {
+    persona_type: 'character',
     prompt_settings_override: {},
     tracked_field_additions: [],
 };
+
+// Persona type definitions
+const PERSONA_TYPES = [
+    {
+        value: 'character',
+        label: 'Character',
+        icon: 'fa-solid fa-user',
+        description: 'The persona is treated as a character in the story. Other characters will interact with them naturally as a peer participant.',
+    },
+    {
+        value: 'narrator',
+        label: 'Narrator',
+        icon: 'fa-solid fa-book-open',
+        description: 'The persona describes what happens in broad strokes, setting scenes and guiding the narrative. Characters treat the persona\'s input as suggestions to play out.',
+    },
+    {
+        value: 'system',
+        label: 'System',
+        icon: 'fa-solid fa-microchip',
+        description: 'The persona gives direct instructions that characters treat as orders. For example, telling a character to do something and that character will follow through.',
+    },
+    {
+        value: 'observer',
+        label: 'Observer',
+        icon: 'fa-solid fa-eye',
+        description: 'The persona watches and comments on events without directly influencing the narrative. Characters are aware of the persona but don\'t act on their input.',
+    },
+];
 
 // #############################################
 // # Array <-> Object Migration
@@ -169,6 +198,7 @@ function readPersonaConfig() {
     }
 
     return {
+        persona_type: stored.persona_type || 'character',
         prompt_settings_override: stored.prompt_settings_override || {},
         tracked_field_additions: Array.isArray(tfAdditions)
             ? JSON.parse(JSON.stringify(tfAdditions))
@@ -189,6 +219,7 @@ function writePersonaConfig(config) {
     }
 
     state.context.extensionSettings[PERSONA_CONFIG_KEY][avatar] = {
+        persona_type: config.persona_type || 'character',
         prompt_settings_override: config.prompt_settings_override || {},
         tracked_field_additions: Array.isArray(config.tracked_field_additions)
             ? config.tracked_field_additions
@@ -274,6 +305,40 @@ function injectPersonaCSS() {
         .ass-btf-dynamic-toggle.active {
             color: #2ecc71;
         }
+
+        /* Persona type selector */
+        .ass-persona-type-section {
+            margin-bottom: 16px;
+        }
+        .ass-persona-type-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .ass-persona-type-row select {
+            flex: 1;
+        }
+        .ass-persona-type-icon {
+            font-size: 18px;
+            width: 24px;
+            text-align: center;
+            transition: color 0.2s;
+        }
+        .ass-persona-type-icon.type-character { color: #9b59b6; }
+        .ass-persona-type-icon.type-narrator { color: #3498db; }
+        .ass-persona-type-icon.type-system { color: #e74c3c; }
+        .ass-persona-type-icon.type-observer { color: #f0ad4e; }
+        .ass-persona-type-desc {
+            font-size: 12px;
+            color: var(--fg_dim);
+            line-height: 1.5;
+            padding: 8px 10px;
+            background: rgba(128, 128, 128, 0.06);
+            border: 1px solid rgba(128, 128, 128, 0.12);
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
     </style>`;
 
     $('head').append(css);
@@ -328,6 +393,24 @@ function openPersonaConfigPanel() {
 
             <div style="margin-bottom:14px; font-size:12px; color:var(--fg_dim);">
                 Config for persona: <b style="color:var(--fg);">${label}</b>
+            </div>
+
+            <!-- Section 0: Persona Type -->
+            <div class="ass-persona-type-section">
+                <div class="ass-brain-section-title">
+                    <i class="fa-solid fa-masks-theater"></i> Persona Type
+                </div>
+                <div class="ass-persona-type-row">
+                    <i id="ass-persona-type-icon" class="ass-persona-type-icon type-${config.persona_type} ${getPersonaTypeIcon(config.persona_type)}"></i>
+                    <select id="ass-persona-type" class="text_pole wide">
+                        ${PERSONA_TYPES.map(t =>
+                            `<option value="${t.value}" ${t.value === config.persona_type ? 'selected' : ''}>${t.label}</option>`
+                        ).join('')}
+                    </select>
+                </div>
+                <div id="ass-persona-type-desc" class="ass-persona-type-desc">
+                    ${getPersonaTypeDescription(config.persona_type)}
+                </div>
             </div>
 
             <!-- Section 1: Prompt Configs Override -->
@@ -387,6 +470,14 @@ function openPersonaConfigPanel() {
         if (e.key === 'Escape') closePersonaConfigPanel();
     });
 
+    // Persona type dropdown — update icon + description on change
+    $('#ass-persona-type').on('change', function () {
+        const type = $(this).val();
+        const $icon = $('#ass-persona-type-icon');
+        $icon.attr('class', `ass-persona-type-icon type-${type} ${getPersonaTypeIcon(type)}`);
+        $('#ass-persona-type-desc').html(getPersonaTypeDescription(type));
+    });
+
     bindCharPromptOverrideEvents('#ass-persona-panel');
     bindTFAdditionEvents('#ass-persona-panel');
 }
@@ -402,6 +493,7 @@ function closePersonaConfigPanel() {
 
 function readCurrentPersonaConfig() {
     return {
+        persona_type: $('#ass-persona-type').val() || 'character',
         prompt_settings_override: readCharPromptOverridesFromUI('#ass-persona-panel'),
         tracked_field_additions: readTFAdditionsFromUI('#ass-persona-panel'),
     };
@@ -423,6 +515,15 @@ export function getPersonaPromptOverrides() {
 }
 
 /**
+ * Get the persona type for the active persona.
+ * Returns 'character' by default.
+ */
+export function getPersonaType() {
+    const config = readPersonaConfig();
+    return config.persona_type || 'character';
+}
+
+/**
  * Get tracked field additions for the active persona.
  * Converts array storage to object format for the payload.
  * Returns null if no additions exist.
@@ -435,6 +536,22 @@ export function getPersonaTrackedFieldAdditions() {
 // #############################################
 // # Initialization
 // #############################################
+
+/**
+ * Get the icon class for a persona type.
+ */
+function getPersonaTypeIcon(type) {
+    const def = PERSONA_TYPES.find(t => t.value === type);
+    return def ? def.icon : 'fa-solid fa-user';
+}
+
+/**
+ * Get the description for a persona type.
+ */
+function getPersonaTypeDescription(type) {
+    const def = PERSONA_TYPES.find(t => t.value === type);
+    return def ? def.description : '';
+}
 
 export function initPersonaConfig() {
     injectPersonaCSS();
