@@ -40,32 +40,80 @@ let openCategories = { character: false, scenario: false, shared: false };
 // #############################################
 
 /**
- * Resolve the extension's base URL (where config.json and default JSON files live).
- * Uses import.meta.url (standard ES module API) which is always correct
- * regardless of how SillyTavern loads extensions.
+ * Cached base URL once resolved (so we don't probe on every call).
  */
-function getExtensionBaseUrl() {
-    // import.meta.url gives the full URL of this module file, e.g.
-    //   https://host/scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
-    // We strip the filename to get the directory.
-    try {
-        const moduleUrl = new URL(import.meta.url);
-        const path = moduleUrl.pathname; // e.g. /scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
-        const dir = path.substring(0, path.lastIndexOf('/') + 1); // strip filename
-        return dir;
-    } catch (e) {
-        console.warn('[Agent-StateSync] import.meta.url failed, falling back to script scan:', e.message);
+let _resolvedBaseUrl = null;
+
+/**
+ * Resolve the extension's base URL (where default JSON files live).
+ * Uses the same multi-strategy approach as index.js config.json loading.
+ * Tries import.meta.url (which may point to dist/ subdir) and one level up,
+ * then falls back to document.currentScript and script-tag scanning.
+ */
+async function getExtensionBaseUrl() {
+    if (_resolvedBaseUrl) return _resolvedBaseUrl;
+
+    // Strategy 1: import.meta.url — try script dir AND one level up (dist/ vs root)
+    if (typeof import.meta !== 'undefined' && import.meta.url) {
+        try {
+            const metaUrl = new URL(import.meta.url);
+            const scriptDir = metaUrl.pathname.substring(0, metaUrl.pathname.lastIndexOf('/') + 1);
+            for (const dir of [scriptDir, `${scriptDir}../`]) {
+                const probeUrl = `${dir}default-tracked-character.json?_=${Date.now()}`;
+                const r = await fetch(probeUrl, { method: 'HEAD' });
+                if (r.ok) {
+                    console.log(`[Agent-StateSync] Base URL resolved via import.meta.url: ${dir}`);
+                    _resolvedBaseUrl = dir;
+                    return dir;
+                }
+            }
+        } catch (e) {
+            console.warn('[Agent-StateSync] import.meta.url strategy failed:', e.message);
+        }
     }
 
-    // Fallback: scan <script> tags
-    const scripts = document.querySelectorAll('script[src]');
-    for (const s of scripts) {
-        const src = s.getAttribute('src') || '';
-        const match = src.match(/^(.*\/Agent-StateSync\/)/i);
-        if (match) return match[1];
+    // Strategy 2: document.currentScript (may not work in webpack bundles)
+    if (document.currentScript?.src) {
+        try {
+            const scriptSrc = document.currentScript.src;
+            const dir = scriptSrc.substring(0, scriptSrc.lastIndexOf('/') + 1);
+            const probeUrl = `${dir}default-tracked-character.json?_=${Date.now()}`;
+            const r = await fetch(probeUrl, { method: 'HEAD' });
+            if (r.ok) {
+                console.log(`[Agent-StateSync] Base URL resolved via document.currentScript: ${dir}`);
+                _resolvedBaseUrl = dir;
+                return dir;
+            }
+        } catch (e) {
+            console.warn('[Agent-StateSync] document.currentScript strategy failed:', e.message);
+        }
     }
-    // Last resort
-    return '/scripts/extensions/third-party/Agent-StateSync/';
+
+    // Strategy 3: scan script tags for our extension
+    try {
+        const scripts = document.querySelectorAll('script[src]');
+        for (const script of scripts) {
+            const src = script.getAttribute('src') || '';
+            if (src.toLowerCase().includes('agent-statesync') || src.includes('index.js')) {
+                const dir = src.substring(0, src.lastIndexOf('/') + 1);
+                const probeUrl = `${dir}default-tracked-character.json?_=${Date.now()}`;
+                const r = await fetch(probeUrl, { method: 'HEAD' });
+                if (r.ok) {
+                    console.log(`[Agent-StateSync] Base URL resolved via script tag scan: ${dir}`);
+                    _resolvedBaseUrl = dir;
+                    return dir;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[Agent-StateSync] script tag scan strategy failed:', e.message);
+    }
+
+    // Last resort — guess based on typical ST third-party extension path
+    const fallback = '/scripts/extensions/third-party/Agent-StateSync/';
+    console.warn(`[Agent-StateSync] Could not resolve base URL, using fallback: ${fallback}`);
+    _resolvedBaseUrl = fallback;
+    return fallback;
 }
 
 /**
@@ -85,9 +133,10 @@ async function loadDefaultFields() {
         // Cache is all-empty (previous fetch failure) — invalidate and retry
         console.log('[Agent-StateSync] Default fields cache was empty, retrying fetch...');
         defaultFieldsCache = null;
+        _resolvedBaseUrl = null; // also re-probe the base URL
     }
 
-    const base = getExtensionBaseUrl();
+    const base = await getExtensionBaseUrl();
     console.log(`[Agent-StateSync] Loading default fields from: ${base}`);
 
     const files = {
@@ -473,7 +522,8 @@ async function loadDefaults(category) {
         console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from JSON`);
 
         if (count === 0) {
-            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing or URL may be wrong. Base URL: ${getExtensionBaseUrl()}`);
+            const baseUrl = await getExtensionBaseUrl();
+            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing or URL may be wrong. Base URL: ${baseUrl}`);
             toastr.warning(`Could not load defaults for ${category} — JSON file not found. Check the browser console (F12) for details.`, 'Agent-StateSync');
             return;
         }
