@@ -224,7 +224,7 @@ function renderCategory({ key, label, open, allowSecret }) {
 
     let fieldsHtml = '';
     for (const [fieldKey, fieldValue] of entries) {
-        fieldsHtml += renderField(key, fieldKey, fieldValue, 0, allowSecret);
+        fieldsHtml += renderField(key, fieldKey, fieldValue, 0, fieldKey, allowSecret);
     }
 
     const countBadge = fieldCount > 0
@@ -241,6 +241,9 @@ function renderCategory({ key, label, open, allowSecret }) {
             <button class="menu_button ass-tf-add-field" data-category="${key}">
                 <i class="fa-solid fa-plus"></i> Add field
             </button>
+            <button class="menu_button ass-tf-add-group-field" data-category="${key}">
+                <i class="fa-solid fa-folder-plus"></i> Add group field
+            </button>
             <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults from ${label} JSON file">
                 <i class="fa-solid fa-rotate-left"></i> Load Defaults
             </button>
@@ -252,14 +255,14 @@ function renderCategory({ key, label, open, allowSecret }) {
  * Render a field — either simple or group (with nested sub-fields).
  * Supports arbitrary nesting depth.
  */
-function renderField(category, key, field, depth, allowSecret) {
+function renderField(category, key, field, depth, path, allowSecret) {
     if (isGroup(field)) {
-        return renderGroupField(category, key, field, depth, allowSecret);
+        return renderGroupField(category, key, field, depth, path, allowSecret);
     }
-    return renderSimpleField(category, key, field, depth, allowSecret);
+    return renderSimpleField(category, key, field, depth, path, allowSecret);
 }
 
-function renderSimpleField(category, key, field, depth, allowSecret) {
+function renderSimpleField(category, key, field, depth, path, allowSecret) {
     const type = field.type || 'string';
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
@@ -273,17 +276,10 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
            </label>`
         : '';
 
-    const addSubBtn = !isNested
-        ? `<button class="menu_button ass-tf-add-sub-to-field"
-                  title="Add sub-field (converts to group)">
-               <i class="fa-solid fa-sitemap"></i>
-           </button>`
-        : '';
-
     const depthClass = isNested ? 'ass-tf-nested' : '';
 
     return `
-    <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+    <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${escapeAttr(path)}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
                    placeholder="Field name">
@@ -296,7 +292,6 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
                 <input type="checkbox" class="ass-tf-extends" ${extendsOnly ? 'checked' : ''}>
             </label>
             ${secretHtml}
-            ${addSubBtn}
             <button class="menu_button ass-tf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -304,7 +299,7 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
     </div>`;
 }
 
-function renderGroupField(category, key, field, depth, allowSecret) {
+function renderGroupField(category, key, field, depth, path, allowSecret) {
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
     const fields = field.fields || {};
@@ -319,11 +314,12 @@ function renderGroupField(category, key, field, depth, allowSecret) {
 
     let subfieldsHtml = '';
     for (const [subKey, subField] of Object.entries(fields)) {
-        subfieldsHtml += renderField(category, subKey, subField, depth + 1, allowSecret);
+        const subPath = path + '.' + subKey;
+        subfieldsHtml += renderField(category, subKey, subField, depth + 1, subPath, allowSecret);
     }
 
     return `
-    <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+    <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${escapeAttr(path)}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
                    placeholder="Group name">
@@ -343,11 +339,11 @@ function renderGroupField(category, key, field, depth, allowSecret) {
         </div>
         <div class="ass-tf-group-actions">
             <button class="menu_button ass-tf-add-subfield"
-                    data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+                    data-category="${category}" data-path="${escapeAttr(path)}">
                 <i class="fa-solid fa-plus"></i> Add sub-field
             </button>
             <button class="menu_button ass-tf-add-subgroup"
-                    data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+                    data-category="${category}" data-path="${escapeAttr(path)}">
                 <i class="fa-solid fa-folder-plus"></i> Add sub-group
             </button>
         </div>
@@ -476,6 +472,25 @@ function addField(category) {
     scheduleSave();
 }
 
+/**
+ * Add a group field (empty group, no sub-fields) at the top level of a category.
+ */
+function addGroupField(category) {
+    syncFieldsFromDOM();
+
+    const name = 'new_group_' + Date.now();
+    currentFields[category] = currentFields[category] || {};
+    currentFields[category][name] = {
+        description: '',
+        is_dynamic: false,
+        fields: {},
+    };
+    openCategories[category] = true;
+    snapshotOpenCategories();
+    renderAllCategories();
+    scheduleSave();
+}
+
 async function loadDefaults(category) {
     try {
         // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
@@ -505,67 +520,49 @@ async function loadDefaults(category) {
     }
 }
 
-function removeField(category, key) {
+/**
+ * Navigate to a nested field using a dot-separated path.
+ * E.g. resolveField(currentFields['character'], 'Inventory.Weapons')
+ * returns the 'Weapons' group inside the 'Inventory' group.
+ * Returns null if the path can't be resolved.
+ */
+function resolveField(parentObj, path) {
+    if (!path || !parentObj) return null;
+    const parts = path.split('.');
+    let current = parentObj;
+    for (const part of parts) {
+        if (!current || typeof current !== 'object') return null;
+        current = current[part];
+    }
+    return current;
+}
+
+/**
+ * Add a simple sub-field to a group identified by its path.
+ */
+function addSubFieldToGroup(category, path) {
     syncFieldsFromDOM();
-    delete currentFields[category]?.[key];
+    const group = resolveField(currentFields[category], path);
+    if (!group || !isGroup(group)) return;
+
+    const subName = 'new_sub_' + Date.now();
+    group.fields[subName] = { type: 'string', hint: '', extends_only: false };
+
     snapshotOpenCategories();
     renderAllCategories();
     scheduleSave();
 }
 
 /**
- * Add a simple sub-field to a group.
- * If the parent is a simple field, convert it to a group first.
+ * Add a sub-group (nested group) to a group identified by its path.
  */
-function addSubFieldToGroup(category, key) {
+function addSubGroup(category, path) {
     syncFieldsFromDOM();
-    const field = findField(currentFields[category], key);
-    if (!field) return;
-
-    if (!isGroup(field)) {
-        field.fields = {};
-        field.fields['sub_1'] = {
-            type: field.type || 'string',
-            hint: field.hint || '',
-            extends_only: field.extends_only || false,
-        };
-        field.description = field.hint || '';
-        delete field.type;
-        delete field.hint;
-        delete field.extends_only;
-    } else {
-        const subName = 'new_sub_' + Date.now();
-        field.fields[subName] = { type: 'string', hint: '', extends_only: false };
-    }
-
-    snapshotOpenCategories();
-    renderAllCategories();
-    scheduleSave();
-}
-
-/**
- * Add a sub-group (nested group) to an existing group.
- */
-function addSubGroup(category, key) {
-    syncFieldsFromDOM();
-    const field = findField(currentFields[category], key);
-    if (!field) return;
-
-    if (!isGroup(field)) {
-        field.fields = {};
-        field.fields['sub_1'] = {
-            type: field.type || 'string',
-            hint: field.hint || '',
-            extends_only: field.extends_only || false,
-        };
-        field.description = field.hint || '';
-        delete field.type;
-        delete field.hint;
-        delete field.extends_only;
-    }
+    const group = resolveField(currentFields[category], path);
+    if (!group || !isGroup(group)) return;
 
     const subName = 'new_group_' + Date.now();
-    field.fields[subName] = {
+    group.fields[subName] = {
         description: '',
         is_dynamic: false,
         fields: {},
@@ -576,29 +573,49 @@ function addSubGroup(category, key) {
     scheduleSave();
 }
 
-function removeSubField(category, parentKey, subKey) {
+/**
+ * Remove a field identified by its path.
+ * For nested fields, navigates to the parent and deletes the key.
+ * If a group is left with no fields and is not dynamic, converts back to simple.
+ */
+function removeFieldByPath(category, path) {
     syncFieldsFromDOM();
-    const parent = findField(currentFields[category], parentKey);
-    if (!parent?.fields) return;
+    if (!path) return;
 
-    delete parent.fields[subKey];
+    const parts = path.split('.');
+    const key = parts.pop(); // the field to remove
+    const parentPath = parts.join('.');
 
-    // If no sub-fields left, convert back to simple field
-    if (Object.keys(parent.fields).length === 0 && !parent.is_dynamic) {
-        parent.type = 'string';
-        parent.hint = parent.description || '';
-        delete parent.fields;
-        delete parent.description;
-        if (parent.is_dynamic !== undefined) delete parent.is_dynamic;
+    let parent;
+    if (parentPath === '') {
+        // Top-level field — parent is the category
+        parent = currentFields[category];
+    } else {
+        parent = resolveField(currentFields[category], parentPath);
+    }
+
+    if (!parent) return;
+
+    // If parent is a group, delete from its .fields
+    if (parent.fields !== undefined) {
+        delete parent.fields[key];
+
+        // If group is now empty and not dynamic, convert back to simple field
+        if (Object.keys(parent.fields).length === 0 && !parent.is_dynamic) {
+            parent.type = 'string';
+            parent.hint = parent.description || '';
+            delete parent.fields;
+            delete parent.description;
+            if (parent.is_dynamic !== undefined) delete parent.is_dynamic;
+        }
+    } else {
+        // Top-level field in the category
+        delete parent[key];
     }
 
     snapshotOpenCategories();
     renderAllCategories();
     scheduleSave();
-}
-
-function findField(parentObj, key) {
-    return parentObj?.[key];
 }
 
 // #############################################
@@ -636,8 +653,6 @@ function openTFModal() {
                     are configured in their respective brain panels.
                     <br><br>
                     <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat (Character category only).
-                    <br>
-                    <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
                 </div>
             </div>
         </div>
@@ -745,41 +760,33 @@ function bindModalEvents() {
         addField($(this).attr('data-category'));
     });
 
+    // Add group field
+    $modal.on('click.ass-tf', '.ass-tf-add-group-field', function () {
+        addGroupField($(this).attr('data-category'));
+    });
+
     // Load defaults
     $modal.on('click.ass-tf', '.ass-tf-load-defaults', async function () {
         const category = $(this).attr('data-category');
         await loadDefaults(category);
     });
 
-    // Remove field
+    // Remove field (any depth)
     $modal.on('click.ass-tf', '.ass-tf-remove-field', function () {
         const $field = $(this).closest('.ass-tf-field');
         const category = $field.attr('data-category');
-        const depth = parseInt($field.attr('data-depth') || '0', 10);
-
-        if (depth === 0) {
-            removeField(category, $field.attr('data-key'));
-        } else {
-            const $parent = $field.parent().closest('.ass-tf-field');
-            const parentKey = $parent.attr('data-key');
-            removeSubField(category, parentKey, $field.attr('data-key'));
-        }
+        const path = $field.attr('data-path') || $field.attr('data-key');
+        removeFieldByPath(category, path);
     });
 
     // Add sub-field to group
     $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
-        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
-    });
-
-    // Add sub-field via sitemap button (converts to group)
-    $modal.on('click.ass-tf', '.ass-tf-add-sub-to-field', function () {
-        const $field = $(this).closest('.ass-tf-field');
-        addSubFieldToGroup($field.attr('data-category'), $field.attr('data-key'));
+        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-path'));
     });
 
     // Add sub-group
     $modal.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
-        addSubGroup($(this).attr('data-category'), $(this).attr('data-key'));
+        addSubGroup($(this).attr('data-category'), $(this).attr('data-path'));
     });
 }
 
