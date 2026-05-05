@@ -146,6 +146,7 @@ function tfAdditionsArrayToObject(additions) {
             obj[name] = {
                 description: entry.description || '',
                 is_dynamic: entry.is_dynamic || false,
+                extends_only: entry.extends_only || false,
                 fields: subFields || {},
             };
             if (entry.secret) obj[name].secret = true;
@@ -156,6 +157,7 @@ function tfAdditionsArrayToObject(additions) {
                 type: entry.type || 'string',
                 hint: entry.hint || '',
                 extends_only: entry.extends_only || false,
+                is_dynamic: entry.is_dynamic || false,
             };
             if (entry.secret) obj[name].secret = true;
             if (entry.required) obj[name].required = true;

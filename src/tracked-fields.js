@@ -224,10 +224,13 @@ function dynamicValueToStored(val) {
 // #############################################
 
 /**
- * Render icon toggle buttons for a simple field.
- * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue)
+ * Render all 5 icon toggle buttons for any field type (simple or group).
+ * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue), Dynamic (green)
  */
-function renderSimpleIcons({ secret, required, immutable, extendsOnly, allowSecret }) {
+function renderFieldIcons({ secret, required, immutable, extendsOnly, isDynamic, allowSecret }) {
+    const dynValue = normalizeDynamicValue(isDynamic);
+    const dynActive = dynValue !== 'false';
+
     const secretBtn = allowSecret
         ? `<button type="button" class="ass-tf-icon-btn ass-tf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
                 title="Secret — hidden from other characters">
@@ -248,34 +251,6 @@ function renderSimpleIcons({ secret, required, immutable, extendsOnly, allowSecr
         <button type="button" class="ass-tf-icon-btn ass-tf-icon-extend${extendsOnly ? ' active' : ''}" data-active="${!!extendsOnly}"
                 title="Extend — only extends, will not overwrite">
             <i class="fa-solid fa-maximize"></i>
-        </button>
-    </div>`;
-}
-
-/**
- * Render icon toggle buttons for a group field.
- * Icons: Secret (purple), Required (orange), Immutable (red), Dynamic (green)
- */
-function renderGroupIcons({ secret, required, immutable, isDynamic, allowSecret }) {
-    const dynValue = normalizeDynamicValue(isDynamic);
-    const dynActive = dynValue !== 'false';
-
-    const secretBtn = allowSecret
-        ? `<button type="button" class="ass-tf-icon-btn ass-tf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
-                title="Secret — hidden from other characters">
-            <i class="fa-solid fa-eye-slash"></i>
-          </button>`
-        : '';
-
-    return `<div class="ass-tf-icon-group">
-        ${secretBtn}
-        <button type="button" class="ass-tf-icon-btn ass-tf-icon-required${required ? ' active' : ''}" data-active="${!!required}"
-                title="Required — must be provided">
-            <i class="fa-solid fa-asterisk"></i>
-        </button>
-        <button type="button" class="ass-tf-icon-btn ass-tf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
-                title="Immutable — will only be written during initialization">
-            <i class="fa-solid fa-lock"></i>
         </button>
         <button type="button" class="ass-tf-icon-btn ass-tf-icon-dynamic${dynActive ? ' active' : ''}" data-value="${dynValue}"
                 title="Dynamic — entries keyed by name">
@@ -407,6 +382,7 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
     const type = field.type || 'string';
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
+    const isDynamic = field.is_dynamic || false;
     const secret = field.secret || false;
     const required = field.required || false;
     const immutable = field.immutable || false;
@@ -421,8 +397,8 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
 
     const depthClass = isNested ? 'ass-tf-nested' : '';
 
-    const iconsHtml = renderSimpleIcons({
-        secret, required, immutable, extendsOnly, allowSecret,
+    const iconsHtml = renderFieldIcons({
+        secret, required, immutable, extendsOnly, isDynamic, allowSecret,
     });
 
     return `
@@ -447,6 +423,7 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
 function renderGroupField(category, key, field, depth, allowSecret) {
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
+    const extendsOnly = field.extends_only || false;
     const secret = field.secret || false;
     const required = field.required || false;
     const immutable = field.immutable || false;
@@ -457,8 +434,8 @@ function renderGroupField(category, key, field, depth, allowSecret) {
         subfieldsHtml += renderField(category, subKey, subField, depth + 1, allowSecret);
     }
 
-    const iconsHtml = renderGroupIcons({
-        secret, required, immutable, isDynamic, allowSecret,
+    const iconsHtml = renderFieldIcons({
+        secret, required, immutable, extendsOnly, isDynamic, allowSecret,
     });
 
     return `
@@ -547,6 +524,7 @@ function readFieldFromDOM($el) {
         const result = {
             description: ($row.find('> .ass-tf-desc').val() || '').trim(),
             is_dynamic: readDynamicValue($row),
+            extends_only: readIconActive($row, '.ass-tf-icon-extend'),
             fields: {},
         };
 
@@ -568,6 +546,7 @@ function readFieldFromDOM($el) {
             type: $row.find('> .ass-tf-type').val() || 'string',
             hint: ($row.find('> .ass-tf-hint').val() || '').trim(),
             extends_only: readIconActive($row, '.ass-tf-icon-extend'),
+            is_dynamic: readDynamicValue($row),
         };
 
         const secret = readIconActive($row, '.ass-tf-icon-secret');

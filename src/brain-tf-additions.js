@@ -81,10 +81,13 @@ function dynamicValueToStored(val) {
 // #############################################
 
 /**
- * Render icon toggle buttons for a simple addition field.
- * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue)
+ * Render all 5 icon toggle buttons for any addition field type (simple or group).
+ * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue), Dynamic (green)
  */
-function renderSimpleIcons({ secret, required, immutable, extendsOnly, allowSecret }) {
+function renderFieldIcons({ secret, required, immutable, extendsOnly, isDynamic, allowSecret }) {
+    const dynValue = normalizeDynamicValue(isDynamic);
+    const dynActive = dynValue !== 'false';
+
     const secretBtn = allowSecret
         ? `<button type="button" class="ass-btf-icon-btn ass-btf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
                 title="Secret — hidden from other characters">
@@ -105,34 +108,6 @@ function renderSimpleIcons({ secret, required, immutable, extendsOnly, allowSecr
         <button type="button" class="ass-btf-icon-btn ass-btf-icon-extend${extendsOnly ? ' active' : ''}" data-active="${!!extendsOnly}"
                 title="Extend — only extends, will not overwrite">
             <i class="fa-solid fa-maximize"></i>
-        </button>
-    </div>`;
-}
-
-/**
- * Render icon toggle buttons for a group addition field.
- * Icons: Secret (purple), Required (orange), Immutable (red), Dynamic (green)
- */
-function renderGroupIcons({ secret, required, immutable, isDynamic, allowSecret }) {
-    const dynValue = normalizeDynamicValue(isDynamic);
-    const dynActive = dynValue !== 'false';
-
-    const secretBtn = allowSecret
-        ? `<button type="button" class="ass-btf-icon-btn ass-btf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
-                title="Secret — hidden from other characters">
-            <i class="fa-solid fa-eye-slash"></i>
-          </button>`
-        : '';
-
-    return `<div class="ass-btf-icon-group">
-        ${secretBtn}
-        <button type="button" class="ass-btf-icon-btn ass-btf-icon-required${required ? ' active' : ''}" data-active="${!!required}"
-                title="Required — must be provided">
-            <i class="fa-solid fa-asterisk"></i>
-        </button>
-        <button type="button" class="ass-btf-icon-btn ass-btf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
-                title="Immutable — will only be written during initialization">
-            <i class="fa-solid fa-lock"></i>
         </button>
         <button type="button" class="ass-btf-icon-btn ass-btf-icon-dynamic${dynActive ? ' active' : ''}" data-value="${dynValue}"
                 title="Dynamic — entries keyed by name">
@@ -376,6 +351,7 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
     const type = entry.type || 'string';
     const hint = entry.hint || '';
     const extendsOnly = entry.extends_only || false;
+    const isDynamic = entry.is_dynamic || false;
     const secret = entry.secret || false;
     const required = entry.required || false;
     const immutable = entry.immutable || false;
@@ -389,8 +365,8 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
 
     const depthClass = isNested ? 'ass-btf-nested' : '';
 
-    const iconsHtml = renderSimpleIcons({
-        secret, required, immutable, extendsOnly, allowSecret,
+    const iconsHtml = renderFieldIcons({
+        secret, required, immutable, extendsOnly, isDynamic, allowSecret,
     });
 
     return `
@@ -416,13 +392,14 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
     const name = entry.name || '';
     const description = entry.description || '';
     const isDynamic = entry.is_dynamic || false;
+    const extendsOnly = entry.extends_only || false;
     const secret = entry.secret || false;
     const required = entry.required || false;
     const immutable = entry.immutable || false;
     const fields = entry.fields || [];
 
-    const iconsHtml = renderGroupIcons({
-        secret, required, immutable, isDynamic, allowSecret,
+    const iconsHtml = renderFieldIcons({
+        secret, required, immutable, extendsOnly, isDynamic, allowSecret,
     });
 
     let subfieldsHtml = '';
@@ -519,6 +496,7 @@ function readAdditionFieldFromDOM($el) {
             name: ($row.find('> .ass-btf-name').val() || '').trim(),
             description: ($row.find('> .ass-btf-desc').val() || '').trim(),
             is_dynamic: readDynamicValue($row),
+            extends_only: readIconActive($row, '.ass-btf-icon-extend'),
             fields: [],
         };
 
@@ -540,6 +518,7 @@ function readAdditionFieldFromDOM($el) {
             type: $row.find('> .ass-btf-type').val() || 'string',
             hint: ($row.find('> .ass-btf-hint').val() || '').trim(),
             extends_only: readIconActive($row, '.ass-btf-icon-extend'),
+            is_dynamic: readDynamicValue($row),
         };
 
         const secret = readIconActive($row, '.ass-btf-icon-secret');
