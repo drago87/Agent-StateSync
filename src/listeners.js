@@ -16,6 +16,7 @@
 import state from './state.js';
 import { EXTENSION_NAME, META_KEY_SESSION } from './settings.js';
 import { getAgentOrigin } from './agent-url.js';
+import { getFreshContext } from './groups.js';
 
 // #############################################
 // # Chat Rename Listener
@@ -74,7 +75,7 @@ export function setupChatRenameListener() {
         } else {
             // Non-group chats: cardName-chatTimestamp
             // ST filenames for non-groups: {cardName} - {chatTimestamp}.jsonl
-            const cardName = state.context.name2 || '';
+            const cardName = getFreshContext().name2 || '';
             const prefix = cardName + ' - ';
             const oldChatName = oldFileName.startsWith(prefix)
                 ? oldFileName.slice(prefix.length)

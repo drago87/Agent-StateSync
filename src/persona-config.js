@@ -27,6 +27,7 @@ import {
     normalizeAdditions, injectBtfCSS,
 } from './brain-tf-additions.js';
 import { tfAdditionsCategorizedToPayload } from './char-config.js';
+import { getFreshContext } from './groups.js';
 
 // #############################################
 // # Constants & Defaults
@@ -85,10 +86,11 @@ function migrateTFAdditionsToArray(obj) {
 // #############################################
 
 function getCurrentPersonaAvatar() {
-    const pu = state.context.powerUserSettings;
+    const ctx = getFreshContext();
+    const pu = ctx.powerUserSettings;
     if (!pu) return null;
 
-    const currentName = state.context.name1 || '';
+    const currentName = ctx.name1 || '';
     const currentDesc = pu.persona_description || '';
 
     if (!currentName && !currentDesc) return null;
@@ -112,7 +114,7 @@ function getCurrentPersonaAvatar() {
 }
 
 function getCurrentPersonaLabel() {
-    return state.context.name1 || 'Unknown Persona';
+    return getFreshContext().name1 || 'Unknown Persona';
 }
 
 // #############################################
@@ -126,7 +128,8 @@ function readPersonaConfig() {
             tracked_field_additions: { character: [], scenario: [], shared: [] } };
     }
 
-    const configs = state.context.extensionSettings?.[PERSONA_CONFIG_KEY] || {};
+    const ctx = getFreshContext();
+    const configs = ctx.extensionSettings?.[PERSONA_CONFIG_KEY] || {};
     const stored = configs[avatar];
 
     if (!stored) {
@@ -155,9 +158,10 @@ function writePersonaConfig(config) {
         return;
     }
 
-    if (!state.context.extensionSettings) state.context.extensionSettings = {};
-    if (!state.context.extensionSettings[PERSONA_CONFIG_KEY]) {
-        state.context.extensionSettings[PERSONA_CONFIG_KEY] = {};
+    const ctx = getFreshContext();
+    if (!ctx.extensionSettings) ctx.extensionSettings = {};
+    if (!ctx.extensionSettings[PERSONA_CONFIG_KEY]) {
+        ctx.extensionSettings[PERSONA_CONFIG_KEY] = {};
     }
 
     // Normalize additions before saving
@@ -167,13 +171,17 @@ function writePersonaConfig(config) {
     let personaType = config.persona_type || 'Character';
     if (!VALID_PERSONA_TYPES.includes(personaType)) personaType = 'Character';
 
-    state.context.extensionSettings[PERSONA_CONFIG_KEY][avatar] = {
+    ctx.extensionSettings[PERSONA_CONFIG_KEY][avatar] = {
         prompt_settings_override: config.prompt_settings_override || {},
         tracked_field_additions: normalizedAdditions,
         persona_type: personaType,
     };
 
-    state.context.saveSettingsDebounced();
+    // Use state.context for saveSettingsDebounced since it's a function reference
+    // that still works even on stale objects
+    if (typeof state.context.saveSettingsDebounced === 'function') {
+        state.context.saveSettingsDebounced();
+    }
     console.log(`[${EXTENSION_NAME}] Persona config saved for "${getCurrentPersonaLabel()}" (${avatar})`);
 }
 

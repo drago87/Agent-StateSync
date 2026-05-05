@@ -16,7 +16,7 @@
 //
 // Supports nested sub-fields and secret marking.
 //
-// File Version: 2.0.0
+// File Version: 3.0.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -301,6 +301,29 @@ export function getPromptOverridesForChar(charObj) {
 export function getCharTrackedFieldAdditions() {
     const config = readCharConfig();
     return tfAdditionsArrayToObject(config.tracked_field_additions);
+}
+
+/**
+ * Convert categorized array-format tracked_field_additions to categorized
+ * object format for the Agent init payload.
+ * Input:  { character: [...], scenario: [...], shared: [...] }
+ * Output: { character: { FieldName: {...} }, scenario: {...}, shared: {...} }
+ * Empty categories are excluded. Returns null if all empty.
+ *
+ * Used by persona-config.js to convert per-persona additions to payload format.
+ */
+export function tfAdditionsCategorizedToPayload(additions) {
+    if (!additions || typeof additions !== 'object') return null;
+
+    const result = {};
+    for (const cat of ['character', 'scenario', 'shared']) {
+        const arr = additions[cat];
+        if (!Array.isArray(arr) || arr.length === 0) continue;
+        const obj = tfAdditionsArrayToObject(arr);
+        if (obj) result[cat] = obj;
+    }
+
+    return Object.keys(result).length > 0 ? result : null;
 }
 
 /**

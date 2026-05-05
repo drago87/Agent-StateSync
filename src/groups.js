@@ -9,8 +9,9 @@
 // Always call getFreshContext() to get current values.
 //
 // Group detection uses context.groupId (camelCase) as the primary signal.
-// If groupId is null/undefined, we are in single-character mode.
-// File Version: 1.2.0
+// If groupId is null/undefined, falls back to chatId matching against
+// groups' chat_id and chats[] arrays (ST may not have updated groupId yet).
+// File Version: 1.3.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';
@@ -71,12 +72,16 @@ export async function fetchGroupsFromServer() {
 /**
  * Find the currently active group for the current chat.
  *
- * Uses context.groupId (camelCase) as the ONLY reliable signal.
- * - If context.groupId is set → find the matching group by ID
- * - If context.groupId is null/undefined → single-character mode (return null)
+ * Two detection strategies (in order of reliability):
  *
- * No chat ID matching or heuristics — those caused false positives
- * where single-character chats were incorrectly detected as groups.
+ * 1. Primary: context.groupId — ST sets this when a group chat is active.
+ *    This is the most reliable signal when available, but ST may not have
+ *    updated it yet right after a chat-changed event.
+ *
+ * 2. Fallback: chatId matching — If groupId is null (ST hasn't updated it yet
+ *    after a chat switch), we check if the current chatId appears in any
+ *    group's chat_id or chats[] array. This is reliable because a chatId
+ *    uniquely identifies a chat, and only one group can own a particular chat.
  *
  * IMPORTANT: Always gets a FRESH context snapshot because the stored
  * state.context becomes stale after chat switches.
@@ -90,32 +95,47 @@ export function findActiveGroup(groups) {
     // Get FRESH context — state.context.groupId may be stale!
     const ctx = getFreshContext();
     const currentGroupId = ctx.groupId || null;
+    const currentChatId = typeof ctx.getCurrentChatId === 'function'
+        ? ctx.getCurrentChatId() : null;
 
-    // Quick exit: if groupId is not set, we're definitely NOT in a group chat.
-    if (!currentGroupId) {
-        console.log(`[${EXTENSION_NAME}] findActiveGroup: groupId is null → single-character mode`);
-        return null;
-    }
+    // --- Strategy 1: context.groupId ---
+    if (currentGroupId) {
+        console.log(`[${EXTENSION_NAME}] findActiveGroup: groupId=${currentGroupId}, name2="${ctx.name2 || ''}"`);
 
-    console.log(`[${EXTENSION_NAME}] findActiveGroup: groupId=${currentGroupId}, name2="${ctx.name2 || ''}"`);
-
-    // Log each group for diagnosis (only first 20 to avoid spam)
-    const logGroups = groups.slice(0, 20);
-    for (const group of logGroups) {
-        const chatsPreview = Array.isArray(group.chats)
-            ? `[${group.chats.length} chats, first=${group.chats[0] || 'none'}]`
-            : 'no chats array';
-        console.log(`[${EXTENSION_NAME}]   Group "${group.name}": id=${group.id}, chat_id=${group.chat_id}, ${chatsPreview}`);
-    }
-
-    // --- Match: group.id === context.groupId ---
-    for (const group of groups) {
-        if (group.id === currentGroupId) {
-            console.log(`[${EXTENSION_NAME}]   -> MATCHED by context.groupId === group.id`);
-            return group;
+        for (const group of groups) {
+            if (group.id === currentGroupId) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED by context.groupId === group.id`);
+                return group;
+            }
         }
+        console.warn(`[${EXTENSION_NAME}]   context.groupId=${currentGroupId} did not match any group.id`);
+        // Fall through to chatId matching
+    } else {
+        console.log(`[${EXTENSION_NAME}] findActiveGroup: groupId is null, trying chatId fallback...`);
     }
-    console.warn(`[${EXTENSION_NAME}]   context.groupId=${currentGroupId} did not match any group.id — treating as single-char`);
+
+    // --- Strategy 2: chatId matching (fallback) ---
+    // ST may not have updated context.groupId yet after a chat switch.
+    // If we have a chatId, check if any group owns it.
+    if (currentChatId) {
+        console.log(`[${EXTENSION_NAME}]   Checking chatId="${currentChatId}" against groups...`);
+        for (const group of groups) {
+            // Match by group.chat_id (current active chat for the group)
+            if (group.chat_id === currentChatId) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED group "${group.name}" by chat_id`);
+                return group;
+            }
+            // Match by group.chats[] array (any chat in the group's history)
+            if (Array.isArray(group.chats) && group.chats.includes(currentChatId)) {
+                console.log(`[${EXTENSION_NAME}]   -> MATCHED group "${group.name}" by chats[] array`);
+                return group;
+            }
+        }
+        console.log(`[${EXTENSION_NAME}]   chatId did not match any group — single-character mode`);
+    } else {
+        console.log(`[${EXTENSION_NAME}]   No chatId available for fallback — single-character mode`);
+    }
+
     return null;
 }
 
@@ -156,6 +176,12 @@ export function resolveGroupMemberCharacters(group) {
 /**
  * Main function: Load group data from ST's server, find active group,
  * resolve member characters, and cache everything for the interceptor.
+ *
+ * Includes a retry mechanism: if findActiveGroup() returns null on the
+ * first try (ST may not have updated context.groupId yet), we retry
+ * after a short delay. The chatId-based fallback in findActiveGroup()
+ * handles most timing issues, but the retry catches edge cases where
+ * even getCurrentChatId() hasn't been updated yet.
  */
 export async function loadGroupData() {
     state.cachedGroups = null;
@@ -167,11 +193,22 @@ export async function loadGroupData() {
     state.cachedGroups = groups;
 
     const ctx = getFreshContext();
+    const currentChatId = typeof ctx.getCurrentChatId === 'function'
+        ? ctx.getCurrentChatId() : null;
     console.log(`[${EXTENSION_NAME}] Loaded ${groups.length} groups from server`);
     console.log(`[${EXTENSION_NAME}] (fresh) context.groupId = ${ctx.groupId ?? 'null (single-char mode)'}`);
     console.log(`[${EXTENSION_NAME}] (stale) state.context.groupId = ${state.context.groupId ?? 'null (may be stale)'}`);
+    console.log(`[${EXTENSION_NAME}] getCurrentChatId() = ${currentChatId ?? 'null'}`);
 
-    const found = findActiveGroup(groups);
+    let found = findActiveGroup(groups);
+
+    // Retry: if no group found but we have a chatId, ST may not have
+    // updated context yet. Wait and try again.
+    if (!found && currentChatId) {
+        console.log(`[${EXTENSION_NAME}] No group found on first try — retrying in 500ms...`);
+        await new Promise(r => setTimeout(r, 500));
+        found = findActiveGroup(groups);
+    }
 
     if (found) {
         state.activeGroup = found;
@@ -184,9 +221,10 @@ export async function loadGroupData() {
         );
 
         // Try to unshallow group members for full card data
-        if (typeof ctx.unshallowGroupMembers === 'function' && found.id) {
+        const freshCtx = getFreshContext();
+        if (typeof freshCtx.unshallowGroupMembers === 'function' && found.id) {
             try {
-                await ctx.unshallowGroupMembers(found.id);
+                await freshCtx.unshallowGroupMembers(found.id);
                 console.log(`[${EXTENSION_NAME}] Called unshallowGroupMembers(${found.id})`);
             } catch (e) {
                 console.warn(`[${EXTENSION_NAME}] unshallowGroupMembers failed:`, e.message);
