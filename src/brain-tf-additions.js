@@ -6,26 +6,32 @@
 //
 // Uses CATEGORIZED ARRAY storage format (v3):
 //   {
-//     character: [{ name, type, hint, extends_only, secret }, ...],
+//     character: [{ name, type, hint, extends_only, secret, required, immutable }, ...],
 //     scenario:  [...],
 //     shared:    [...]
 //   }
 //   Each category's array replaces entirely on merge — no ghost fields after F5.
 //
+// Icon toggles (instead of checkboxes):
+//   Secret    (purple) — hidden from other characters
+//   Required  (orange) — must be provided
+//   Immutable (red)    — will only be written during initialization
+//   Extend    (blue)   — only extends, will not overwrite (simple fields only)
+//   Dynamic   (green)  — entries keyed by name (group fields only)
+//     Dynamic popup: Off | True | Per-Character | Situation Based
+//
 // Supports:
 //   - 3 category dropdowns (Characters, Scenario, Shared) — like Database
 //     Tracked Fields but WITHOUT Load Defaults / Save as Default buttons
 //   - Arbitrary nested sub-fields (sub-fields can contain sub-groups)
-//   - Secret checkbox (marks fields as private for other characters)
-//   - Sub-groups (add nested group within a group)
-//   - Group→Simple back-conversion (when last sub-field removed)
+//   - Add group-field button (starts as group with empty sub-fields)
 //   - Import from Database Tracked Fields
 //
 // Event binding uses delegated handlers on the panel element.
 // The .ass-btf-container element stays stable across re-renders
 // (only innerHTML changes), so delegated events survive.
 //
-// File Version: 3.0.0
+// File Version: 4.0.0
 
 import state from './state.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
@@ -50,6 +56,153 @@ function buildTypeOptions(selected) {
 }
 
 // #############################################
+// # Dynamic Value Helpers
+// #############################################
+
+/**
+ * Normalize is_dynamic to a string value for the data-value attribute.
+ */
+function normalizeDynamicValue(val) {
+    if (!val || val === 'false') return 'false';
+    if (val === true) return 'True';
+    return String(val);
+}
+
+/**
+ * Convert a data-value string back to the stored is_dynamic value.
+ */
+function dynamicValueToStored(val) {
+    if (!val || val === 'false') return false;
+    return val;
+}
+
+// #############################################
+// # Icon Toggle Rendering
+// #############################################
+
+/**
+ * Render icon toggle buttons for a simple addition field.
+ * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue)
+ */
+function renderSimpleIcons({ secret, required, immutable, extendsOnly, allowSecret }) {
+    const secretBtn = allowSecret
+        ? `<button type="button" class="ass-btf-icon-btn ass-btf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
+                title="Secret — hidden from other characters">
+            <i class="fa-solid fa-eye-slash"></i>
+          </button>`
+        : '';
+
+    return `<div class="ass-btf-icon-group">
+        ${secretBtn}
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-required${required ? ' active' : ''}" data-active="${!!required}"
+                title="Required — must be provided">
+            <i class="fa-solid fa-asterisk"></i>
+        </button>
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
+                title="Immutable — will only be written during initialization">
+            <i class="fa-solid fa-lock"></i>
+        </button>
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-extend${extendsOnly ? ' active' : ''}" data-active="${!!extendsOnly}"
+                title="Extend — only extends, will not overwrite">
+            <i class="fa-solid fa-maximize"></i>
+        </button>
+    </div>`;
+}
+
+/**
+ * Render icon toggle buttons for a group addition field.
+ * Icons: Secret (purple), Required (orange), Immutable (red), Dynamic (green)
+ */
+function renderGroupIcons({ secret, required, immutable, isDynamic, allowSecret }) {
+    const dynValue = normalizeDynamicValue(isDynamic);
+    const dynActive = dynValue !== 'false';
+
+    const secretBtn = allowSecret
+        ? `<button type="button" class="ass-btf-icon-btn ass-btf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
+                title="Secret — hidden from other characters">
+            <i class="fa-solid fa-eye-slash"></i>
+          </button>`
+        : '';
+
+    return `<div class="ass-btf-icon-group">
+        ${secretBtn}
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-required${required ? ' active' : ''}" data-active="${!!required}"
+                title="Required — must be provided">
+            <i class="fa-solid fa-asterisk"></i>
+        </button>
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
+                title="Immutable — will only be written during initialization">
+            <i class="fa-solid fa-lock"></i>
+        </button>
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-dynamic${dynActive ? ' active' : ''}" data-value="${dynValue}"
+                title="Dynamic — entries keyed by name">
+            <i class="fa-solid fa-shuffle"></i>
+        </button>
+    </div>`;
+}
+
+// #############################################
+// # Dynamic Popup
+// #############################################
+
+/**
+ * Show the Dynamic popup for a group field's Dynamic icon.
+ */
+function showDynamicPopup($btn, panelSelector) {
+    // Remove any existing popup
+    $('.ass-btf-dyn-popup').remove();
+    $(document).off('mousedown.ass-btf-dyn-popup');
+
+    const currentValue = $btn.attr('data-value') || 'false';
+
+    const options = [
+        { value: 'false', label: 'Off' },
+        { value: 'True', label: 'True' },
+        { value: 'Per-Character', label: 'Per-Character' },
+        { value: 'Situation-Based', label: 'Situation-Based' },
+    ];
+
+    const optionsHtml = options.map(opt =>
+        `<div class="ass-btf-dyn-option${opt.value === currentValue ? ' ass-btf-dyn-active' : ''}"
+             data-value="${opt.value}">${opt.label}</div>`
+    ).join('');
+
+    const $popup = $(`<div class="ass-btf-dyn-popup">${optionsHtml}</div>`);
+
+    // Position near the button
+    const btnRect = $btn[0].getBoundingClientRect();
+    $popup.css({
+        position: 'fixed',
+        top: btnRect.bottom + 4,
+        left: Math.max(4, btnRect.left - 60),
+        zIndex: 10002,
+    });
+
+    $('body').append($popup);
+
+    // Click handler for options
+    $popup.on('click', '.ass-btf-dyn-option', function () {
+        const newValue = $(this).attr('data-value');
+        $btn.attr('data-value', newValue);
+        const isActive = newValue !== 'false';
+        $btn.toggleClass('active', isActive);
+        $popup.remove();
+        $(document).off('mousedown.ass-btf-dyn-popup');
+        // No sync needed here — readTFAdditionsFromUI reads data-value at save time
+    });
+
+    // Click outside to close
+    setTimeout(() => {
+        $(document).on('mousedown.ass-btf-dyn-popup', function (e) {
+            if (!$(e.target).closest('.ass-btf-dyn-popup, .ass-btf-icon-dynamic').length) {
+                $popup.remove();
+                $(document).off('mousedown.ass-btf-dyn-popup');
+            }
+        });
+    }, 10);
+}
+
+// #############################################
 // # Category Rendering
 // #############################################
 
@@ -66,12 +219,11 @@ const CATEGORIES = [
  * @param {object} opts - { allowSecret: boolean }
  */
 export function renderTFAdditions(additions, opts = {}) {
-    const allowSecret = opts.allowSecret !== false; // default true
+    const allowSecret = opts.allowSecret !== false;
 
     // Normalize additions to categorized format
     const normalized = normalizeAdditions(additions);
 
-    // Snapshot which categories are open (from previous render)
     // Categories with fields start open
     for (const cat of CATEGORIES) {
         const arr = normalized[cat.key];
@@ -88,20 +240,13 @@ export function renderTFAdditions(additions, opts = {}) {
 
 /**
  * Normalize additions data to the categorized format.
- * Handles:
- *   - null/undefined → empty categories
- *   - flat array (v2 legacy) → put everything in 'character'
- *   - flat object (v1 legacy) → convert to array, put in 'character'
- *   - categorized object → use as-is
  */
 export function normalizeAdditions(additions) {
     const empty = { character: [], scenario: [], shared: [] };
 
     if (!additions) return empty;
 
-    // Already categorized format: { character: [...], scenario: [...], shared: [...] }
     if (typeof additions === 'object' && !Array.isArray(additions)) {
-        // Check if it has category keys
         if (additions.character !== undefined || additions.scenario !== undefined || additions.shared !== undefined) {
             return {
                 character: Array.isArray(additions.character) ? additions.character : [],
@@ -109,12 +254,10 @@ export function normalizeAdditions(additions) {
                 shared:    Array.isArray(additions.shared)    ? additions.shared    : [],
             };
         }
-        // It's a flat object (v1 legacy) — convert to array, put in 'character'
         const arr = migrateObjectToArray(additions);
         return { ...empty, character: arr };
     }
 
-    // Flat array (v2 legacy) — put everything in 'character'
     if (Array.isArray(additions)) {
         return { ...empty, character: additions };
     }
@@ -124,8 +267,6 @@ export function normalizeAdditions(additions) {
 
 /**
  * Migrate old object-format tracked_field_additions to array format.
- * Old: { "FieldName": { type, hint, extends_only } }
- * New: [{ name: "FieldName", type, hint, extends_only, secret }]
  */
 function migrateObjectToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
@@ -136,6 +277,8 @@ function migrateObjectToArray(obj) {
                 description: field.description || '',
                 is_dynamic: field.is_dynamic || false,
                 secret: field.secret || false,
+                required: field.required || false,
+                immutable: field.immutable || false,
                 fields: migrateObjectToArray(field.fields),
             };
         }
@@ -145,6 +288,8 @@ function migrateObjectToArray(obj) {
             hint: field.hint || '',
             extends_only: field.extends_only || false,
             secret: field.secret || false,
+            required: field.required || false,
+            immutable: field.immutable || false,
         };
     });
 }
@@ -172,7 +317,7 @@ function renderCategoriesInner(additions, opts = {}) {
 }
 
 /**
- * Render a single category section (like tracked-fields.js but without Load/Save Default).
+ * Render a single category section (without Load/Save Default).
  */
 function renderCategory(catConfig, fields, allowSecret) {
     const { key, label } = catConfig;
@@ -205,6 +350,9 @@ function renderCategory(catConfig, fields, allowSecret) {
             <button class="menu_button ass-btf-add-field" data-category="${key}">
                 <i class="fa-solid fa-plus"></i> Add field
             </button>
+            <button class="menu_button ass-btf-add-group-field" data-category="${key}">
+                <i class="fa-solid fa-folder-plus"></i> Add group-field
+            </button>
         </div>
     </details>`;
 }
@@ -215,7 +363,6 @@ function renderCategory(catConfig, fields, allowSecret) {
 
 /**
  * Render a single addition field (simple or group).
- * Supports arbitrary nesting via recursion.
  */
 function renderAdditionField(entry, index, depth, allowSecret) {
     if (isGroupEntry(entry)) {
@@ -230,14 +377,9 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
     const hint = entry.hint || '';
     const extendsOnly = entry.extends_only || false;
     const secret = entry.secret || false;
+    const required = entry.required || false;
+    const immutable = entry.immutable || false;
     const isNested = depth > 0;
-
-    const secretHtml = allowSecret
-        ? `<label class="ass-btf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-btf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
-           </label>`
-        : '';
 
     const addSubBtn = !isNested
         ? `<button class="menu_button ass-btf-add-sub-to-field" title="Add sub-field (converts to group)">
@@ -246,6 +388,10 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
         : '';
 
     const depthClass = isNested ? 'ass-btf-nested' : '';
+
+    const iconsHtml = renderSimpleIcons({
+        secret, required, immutable, extendsOnly, allowSecret,
+    });
 
     return `
     <div class="ass-btf-field ${depthClass}" data-index="${index}" data-depth="${depth}">
@@ -257,10 +403,7 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
             <select class="text_pole ass-btf-type" style="flex:0 0 130px;">
                 ${buildTypeOptions(type)}
             </select>
-            <label class="ass-btf-extends-label" title="Only extends this and will not overwrite">
-                <input type="checkbox" class="ass-btf-extends" ${extendsOnly ? 'checked' : ''}>
-            </label>
-            ${secretHtml}
+            ${iconsHtml}
             ${addSubBtn}
             <button class="menu_button ass-btf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
@@ -274,14 +417,13 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
     const description = entry.description || '';
     const isDynamic = entry.is_dynamic || false;
     const secret = entry.secret || false;
+    const required = entry.required || false;
+    const immutable = entry.immutable || false;
     const fields = entry.fields || [];
 
-    const secretHtml = allowSecret
-        ? `<label class="ass-btf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-btf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash" style="font-size:11px;"></i>
-           </label>`
-        : '';
+    const iconsHtml = renderGroupIcons({
+        secret, required, immutable, isDynamic, allowSecret,
+    });
 
     let subfieldsHtml = '';
     fields.forEach((subEntry, subIndex) => {
@@ -295,11 +437,7 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
                    placeholder="Group name" style="flex:1; min-width:0;">
             <input class="text_pole ass-btf-desc" value="${escapeAttr(description)}"
                    placeholder="Description" style="flex:3; min-width:0;">
-            <label class="ass-btf-dyn-label" title="Dynamic — entries keyed by name">
-                <input type="checkbox" class="ass-btf-dynamic" ${isDynamic ? 'checked' : ''}>
-                <small>Dyn</small>
-            </label>
-            ${secretHtml}
+            ${iconsHtml}
             <button class="menu_button ass-btf-remove-field" title="Remove group">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -307,7 +445,7 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
         <div class="ass-btf-subfields">
             ${subfieldsHtml}
         </div>
-        <div style="margin:4px 0 4px 20px; display:flex; gap:6px;">
+        <div class="ass-btf-group-actions">
             <button class="menu_button ass-btf-add-subfield">
                 <i class="fa-solid fa-plus"></i> Add sub-field
             </button>
@@ -327,9 +465,26 @@ function isGroupEntry(entry) {
 // #############################################
 
 /**
+ * Read icon toggle active state from a row's icon group.
+ */
+function readIconActive($row, selector) {
+    const $btn = $row.find('> .ass-btf-icon-group > ' + selector);
+    if (!$btn.length) return false;
+    return $btn.attr('data-active') === 'true';
+}
+
+/**
+ * Read Dynamic icon value from a row's icon group.
+ */
+function readDynamicValue($row) {
+    const $btn = $row.find('> .ass-btf-icon-group > .ass-btf-icon-dynamic');
+    if (!$btn.length) return false;
+    return dynamicValueToStored($btn.attr('data-value') || 'false');
+}
+
+/**
  * Read all tracked field additions from the DOM.
  * Returns a categorized object: { character: [...], scenario: [...], shared: [...] }
- * @param {string} panelSelector - CSS selector to scope the search (e.g. '#ass-brain-panel')
  */
 export function readTFAdditionsFromUI(panelSelector = '') {
     const prefix = panelSelector ? `${panelSelector} ` : '';
@@ -357,21 +512,23 @@ export function readTFAdditionsFromUI(panelSelector = '') {
  * Recursively reads nested sub-fields.
  */
 function readAdditionFieldFromDOM($el) {
+    const $row = $el.find('> .ass-btf-row');
+
     if ($el.hasClass('ass-btf-group')) {
         const result = {
-            name: ($el.find('> .ass-btf-row > .ass-btf-name').val() || '').trim(),
-            description: ($el.find('> .ass-btf-row > .ass-btf-desc').val() || '').trim(),
-            is_dynamic: $el.find('> .ass-btf-row > .ass-btf-dynamic').is(':checked'),
+            name: ($row.find('> .ass-btf-name').val() || '').trim(),
+            description: ($row.find('> .ass-btf-desc').val() || '').trim(),
+            is_dynamic: readDynamicValue($row),
             fields: [],
         };
 
-        // Read secret
-        const $secret = $el.find('> .ass-btf-row > .ass-btf-secret-label > .ass-btf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        const secret = readIconActive($row, '.ass-btf-icon-secret');
+        const required = readIconActive($row, '.ass-btf-icon-required');
+        const immutable = readIconActive($row, '.ass-btf-icon-immutable');
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
-        // Read direct child fields
         $el.children('.ass-btf-subfields').children('.ass-btf-field').each(function () {
             result.fields.push(readAdditionFieldFromDOM($(this)));
         });
@@ -379,17 +536,18 @@ function readAdditionFieldFromDOM($el) {
         return result;
     } else {
         const result = {
-            name: ($el.find('> .ass-btf-row > .ass-btf-name').val() || '').trim(),
-            type: $el.find('> .ass-btf-row > .ass-btf-type').val() || 'string',
-            hint: ($el.find('> .ass-btf-row > .ass-btf-hint').val() || '').trim(),
-            extends_only: $el.find('> .ass-btf-row > .ass-btf-extends').is(':checked'),
+            name: ($row.find('> .ass-btf-name').val() || '').trim(),
+            type: $row.find('> .ass-btf-type').val() || 'string',
+            hint: ($row.find('> .ass-btf-hint').val() || '').trim(),
+            extends_only: readIconActive($row, '.ass-btf-icon-extend'),
         };
 
-        // Read secret
-        const $secret = $el.find('> .ass-btf-row > .ass-btf-secret-label > .ass-btf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        const secret = readIconActive($row, '.ass-btf-icon-secret');
+        const required = readIconActive($row, '.ass-btf-icon-required');
+        const immutable = readIconActive($row, '.ass-btf-icon-immutable');
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         return result;
     }
@@ -428,8 +586,6 @@ export function renderTFContainer(additions, panelSelector = '') {
 /**
  * Build an index path from the DOM, walking up from a field element
  * to the category root.
- * E.g. for a sub-field at additions.character[1].fields[2]:
- *   path = ['character', 1, 2]
  */
 function buildFieldPath($field) {
     const path = [];
@@ -441,7 +597,6 @@ function buildFieldPath($field) {
         $current = $current.parent().closest('.ass-btf-field');
     }
 
-    // Prepend the category key
     const $category = $field.closest('.ass-btf-category');
     if ($category.length) {
         path.unshift($category.attr('data-category'));
@@ -452,13 +607,10 @@ function buildFieldPath($field) {
 
 /**
  * Navigate the additions object using a path.
- * Path format: ['character', 1, 2] → additions.character[1].fields[2]
- * Returns the entry at the given path, or null if not found.
  */
 function findEntryByPath(additions, path) {
     if (path.length === 0) return null;
 
-    // First element is the category key
     const category = path[0];
     let current = additions[category];
     if (!Array.isArray(current)) return null;
@@ -466,11 +618,9 @@ function findEntryByPath(additions, path) {
     for (let i = 1; i < path.length; i++) {
         const idx = path[i];
         if (i === 1) {
-            // Top-level field in category
             if (idx >= current.length) return null;
             current = current[idx];
         } else {
-            // Nested field within a group
             if (!current || !Array.isArray(current.fields) || idx >= current.fields.length) return null;
             current = current.fields[idx];
         }
@@ -480,22 +630,18 @@ function findEntryByPath(additions, path) {
 
 /**
  * Remove an entry from the additions at the given path.
- * After removal, if a group is left with no fields and is not
- * dynamic, it is converted back to a simple field.
  */
 function removeFromAdditions(additions, path) {
-    if (path.length < 2) return; // Need at least [category, index]
+    if (path.length < 2) return;
 
     const category = path[0];
     if (!additions[category]) return;
 
     if (path.length === 2) {
-        // Top-level entry in category
         additions[category].splice(path[1], 1);
         return;
     }
 
-    // Navigate to the parent array
     let current = additions[category];
     for (let i = 1; i < path.length - 1; i++) {
         const idx = path[i];
@@ -507,7 +653,6 @@ function removeFromAdditions(additions, path) {
         }
     }
 
-    // Remove from the parent's fields array
     const lastIdx = path[path.length - 1];
     if (Array.isArray(current.fields)) {
         current.fields.splice(lastIdx, 1);
@@ -525,6 +670,8 @@ function removeFromAdditions(additions, path) {
                     type: 'string',
                     hint: current.description || '',
                     extends_only: false,
+                    required: false,
+                    immutable: false,
                 };
                 if (current.secret) simpleField.secret = current.secret;
                 parentArray[parentIndex] = simpleField;
@@ -539,7 +686,6 @@ function removeFromAdditions(additions, path) {
 
 /**
  * Open the import modal showing available fields from the Database Tracked Fields.
- * User can select individual fields/groups to import into additions.
  */
 function openImportModal(panelSelector) {
     if ($('#ass-btf-import-overlay').length) return;
@@ -637,7 +783,6 @@ function openImportModal(panelSelector) {
             return;
         }
 
-        // Import the selected fields
         importSelectedFields(selected, panelSelector);
 
         $('#ass-btf-import-overlay').remove();
@@ -647,7 +792,6 @@ function openImportModal(panelSelector) {
 
 /**
  * Import selected fields from tracked_fields into additions.
- * Converts from dict format (tracked_fields) to array format (additions).
  */
 function importSelectedFields(selected, panelSelector) {
     const additions = readTFAdditionsFromUI(panelSelector);
@@ -661,7 +805,6 @@ function importSelectedFields(selected, panelSelector) {
         const catFields = trackedFields[cat];
         if (!catFields || !catFields[fieldKey]) continue;
 
-        // Convert dict-format field to array-format entry
         const entry = trackedFieldToEntry(fieldKey, catFields[fieldKey]);
         if (entry) {
             if (!Array.isArray(additions[cat])) additions[cat] = [];
@@ -678,14 +821,11 @@ function importSelectedFields(selected, panelSelector) {
 
 /**
  * Convert a single tracked field (dict format) to an array-format entry.
- * Dict: { type, hint, extends_only, secret, fields: {...} }
- * Array: { name, type, hint, extends_only, secret, fields: [...] }
  */
 function trackedFieldToEntry(key, field) {
     if (!field || typeof field !== 'object') return null;
 
     if (field.fields !== undefined) {
-        // Group
         const subEntries = [];
         for (const [subKey, subField] of Object.entries(field.fields || {})) {
             const subEntry = trackedFieldToEntry(subKey, subField);
@@ -696,6 +836,8 @@ function trackedFieldToEntry(key, field) {
             description: field.description || '',
             is_dynamic: field.is_dynamic || false,
             secret: field.secret || false,
+            required: field.required || false,
+            immutable: field.immutable || false,
             fields: subEntries,
         };
     }
@@ -706,6 +848,8 @@ function trackedFieldToEntry(key, field) {
         hint: field.hint || '',
         extends_only: field.extends_only || false,
         secret: field.secret || false,
+        required: field.required || false,
+        immutable: field.immutable || false,
     };
 }
 
@@ -715,11 +859,7 @@ function trackedFieldToEntry(key, field) {
 
 /**
  * Bind events for the TF additions editor.
- * Delegated on the panel element — survives innerHTML re-renders
- * because the panel and .ass-btf-container stay in the DOM.
- * Must be called after the panel HTML is injected into the DOM.
- *
- * @param {string} panelSelector - CSS selector for the panel (e.g. '#ass-brain-panel')
+ * Delegated on the panel element — survives innerHTML re-renders.
  */
 export function bindTFAdditionEvents(panelSelector = '') {
     const panelId = panelSelector || '#ass-brain-panel';
@@ -734,7 +874,17 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const category = $(this).attr('data-category');
         const additions = readTFAdditionsFromUI(panelSelector);
         if (!additions[category]) additions[category] = [];
-        additions[category].push({ name: '', type: 'string', hint: '', extends_only: false });
+        additions[category].push({ name: '', type: 'string', hint: '', extends_only: false, required: false, immutable: false });
+        openCategories[category] = true;
+        renderTFContainer(additions, panelSelector);
+    });
+
+    // --- Add group-field (per-category) ---
+    $panel.on('click.ass-btf', '.ass-btf-add-group-field', function () {
+        const category = $(this).attr('data-category');
+        const additions = readTFAdditionsFromUI(panelSelector);
+        if (!additions[category]) additions[category] = [];
+        additions[category].push({ name: '', description: '', is_dynamic: false, fields: [], required: false, immutable: false });
         openCategories[category] = true;
         renderTFContainer(additions, panelSelector);
     });
@@ -758,15 +908,15 @@ export function bindTFAdditionEvents(panelSelector = '') {
         if (!entry) return;
 
         if (isGroupEntry(entry)) {
-            // Already a group — just add a sub-field
-            entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false });
+            entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false, required: false, immutable: false });
         } else {
-            // Convert simple → group, preserving original as first sub-field
             entry.fields = [{
                 name: 'sub_1',
                 type: entry.type || 'string',
                 hint: '',
                 extends_only: entry.extends_only || false,
+                required: false,
+                immutable: false,
             }];
             entry.description = entry.hint || '';
             delete entry.type;
@@ -784,7 +934,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const entry = findEntryByPath(additions, path);
         if (!entry || !isGroupEntry(entry)) return;
 
-        entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false });
+        entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false, required: false, immutable: false });
         renderTFContainer(additions, panelSelector);
     });
 
@@ -797,12 +947,13 @@ export function bindTFAdditionEvents(panelSelector = '') {
         if (!entry) return;
 
         if (!isGroupEntry(entry)) {
-            // Convert simple → group first
             entry.fields = [{
                 name: 'sub_1',
                 type: entry.type || 'string',
                 hint: '',
                 extends_only: entry.extends_only || false,
+                required: false,
+                immutable: false,
             }];
             entry.description = entry.hint || '';
             delete entry.type;
@@ -815,8 +966,26 @@ export function bindTFAdditionEvents(panelSelector = '') {
             description: '',
             is_dynamic: false,
             fields: [],
+            required: false,
+            immutable: false,
         });
         renderTFContainer(additions, panelSelector);
+    });
+
+    // --- Icon toggle clicks (Secret, Required, Immutable, Extend) ---
+    $panel.on('click.ass-btf', '.ass-btf-icon-secret, .ass-btf-icon-required, .ass-btf-icon-immutable, .ass-btf-icon-extend', function (e) {
+        e.stopPropagation();
+        const $btn = $(this);
+        const isActive = $btn.attr('data-active') === 'true';
+        $btn.attr('data-active', !isActive);
+        $btn.toggleClass('active', !isActive);
+        // No sync needed — readTFAdditionsFromUI reads data-active at save time
+    });
+
+    // --- Dynamic icon click — show popup ---
+    $panel.on('click.ass-btf', '.ass-btf-icon-dynamic', function (e) {
+        e.stopPropagation();
+        showDynamicPopup($(this), panelSelector);
     });
 
     // --- Track category open/close state ---
@@ -876,6 +1045,7 @@ export function injectBtfCSS() {
         margin: 8px 0 4px 0;
         display: flex;
         gap: 6px;
+        flex-wrap: wrap;
     }
 
     /* Tracked field additions containers */
@@ -911,28 +1081,74 @@ export function injectBtfCSS() {
         border-left: 2px solid rgba(128, 128, 128, 0.2);
     }
 
-    /* Checkbox labels */
-    .ass-btf-extends-label,
-    .ass-btf-dyn-label,
-    .ass-btf-secret-label {
+    /* Group action buttons */
+    .ass-btf-group-actions {
+        margin: 4px 0 4px 20px;
+        display: flex;
+        gap: 6px;
+    }
+
+    /* Icon toggle buttons */
+    .ass-btf-icon-group {
         display: flex;
         align-items: center;
-        gap: 3px;
-        cursor: pointer;
+        gap: 2px;
         flex-shrink: 0;
+    }
+    .ass-btf-icon-btn {
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        padding: 2px 5px;
+        cursor: pointer;
         font-size: 12px;
-        white-space: nowrap;
+        line-height: 1;
+        transition: all 0.15s;
+        opacity: 0.3;
+    }
+    .ass-btf-icon-btn:hover {
+        opacity: 0.7;
+    }
+    .ass-btf-icon-btn.active {
+        opacity: 1;
+    }
+    .ass-btf-icon-secret { color: #9b59b6; }
+    .ass-btf-icon-secret.active { background: rgba(155, 89, 182, 0.15); border-color: rgba(155, 89, 182, 0.3); }
+    .ass-btf-icon-required { color: #e67e22; }
+    .ass-btf-icon-required.active { background: rgba(230, 126, 34, 0.15); border-color: rgba(230, 126, 34, 0.3); }
+    .ass-btf-icon-immutable { color: #e74c3c; }
+    .ass-btf-icon-immutable.active { background: rgba(231, 76, 60, 0.15); border-color: rgba(231, 76, 60, 0.3); }
+    .ass-btf-icon-extend { color: #3498db; }
+    .ass-btf-icon-extend.active { background: rgba(52, 152, 219, 0.15); border-color: rgba(52, 152, 219, 0.3); }
+    .ass-btf-icon-dynamic { color: #27ae60; }
+    .ass-btf-icon-dynamic.active { background: rgba(39, 174, 96, 0.15); border-color: rgba(39, 174, 96, 0.3); }
+
+    /* Dynamic popup */
+    .ass-btf-dyn-popup {
+        background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.98));
+        border: 1px solid rgba(128, 128, 128, 0.3);
+        border-radius: 6px;
+        padding: 4px 0;
+        min-width: 150px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+    .ass-btf-dyn-option {
+        padding: 6px 12px;
+        font-size: 12px;
+        cursor: pointer;
         color: var(--fg_dim);
+        transition: background 0.1s, color 0.1s;
     }
-    .ass-btf-secret-label {
-        color: #9b59b6;
+    .ass-btf-dyn-option:hover {
+        background: rgba(128, 128, 128, 0.15);
+        color: var(--fg);
     }
-    .ass-btf-secret-label input,
-    .ass-btf-extends-label input,
-    .ass-btf-dyn-label input {
-        margin: 0;
-        width: 14px;
-        height: 14px;
+    .ass-btf-dyn-active {
+        color: #27ae60;
+        font-weight: 600;
+    }
+    .ass-btf-dyn-active::before {
+        content: '\\2713 ';
     }
 
     /* Import section */

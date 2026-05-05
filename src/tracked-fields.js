@@ -4,7 +4,14 @@
 // Three categories: character, scenario, shared.
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Sub-fields can themselves be groups (nested to arbitrary depth).
-// Character fields support a "secret" checkbox for privacy marking.
+//
+// Icon toggles (instead of checkboxes):
+//   Secret    (purple) — hidden from other characters (Character category only)
+//   Required  (orange) — must be provided
+//   Immutable (red)    — will only be written during initialization
+//   Extend    (blue)   — only extends, will not overwrite (simple fields only)
+//   Dynamic   (green)  — entries keyed by name (group fields only)
+//     Dynamic popup: Off | True | Per-Character | Situation Based
 //
 // Defaults loaded from external JSON files in the extension root:
 //   - default-tracked-character.json
@@ -16,14 +23,15 @@
 //
 // The editor opens in a wide overlay modal (not inline in the settings
 // panel) so that the field rows have enough horizontal space for
-// all the inputs, checkboxes, and buttons.
+// all the inputs, icons, and buttons.
 //
-// File Version: 3.1.0
+// File Version: 4.0.0
 
 import state from './state.js';
 
-// Settings key for user customizations
+// Settings keys
 const TRACKED_FIELDS_KEY = 'agent_statesync_tracked_fields';
+const SAVED_DEFAULTS_KEY = 'agent_statesync_saved_defaults';
 
 // Module-level: current fields (defaults merged with user edits)
 let currentFields = null;
@@ -45,26 +53,21 @@ let openCategories = { character: false, scenario: false, shared: false };
  * regardless of how SillyTavern loads extensions.
  */
 function getExtensionBaseUrl() {
-    // import.meta.url gives the full URL of this module file, e.g.
-    //   https://host/scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
-    // We strip the filename to get the directory.
     try {
         const moduleUrl = new URL(import.meta.url);
-        const path = moduleUrl.pathname; // e.g. /scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
-        const dir = path.substring(0, path.lastIndexOf('/') + 1); // strip filename
+        const path = moduleUrl.pathname;
+        const dir = path.substring(0, path.lastIndexOf('/') + 1);
         return dir;
     } catch (e) {
         console.warn('[Agent-StateSync] import.meta.url failed, falling back to script scan:', e.message);
     }
 
-    // Fallback: scan <script> tags
     const scripts = document.querySelectorAll('script[src]');
     for (const s of scripts) {
         const src = s.getAttribute('src') || '';
         const match = src.match(/^(.*\/Agent-StateSync\/)/i);
         if (match) return match[1];
     }
-    // Last resort
     return '/scripts/extensions/third-party/Agent-StateSync/';
 }
 
@@ -76,13 +79,11 @@ function getExtensionBaseUrl() {
  * it is invalidated so the next call will retry.
  */
 async function loadDefaultFields() {
-    // If we have a cached version with actual content, return it
     if (defaultFieldsCache) {
         const hasContent = ['character', 'scenario', 'shared'].some(
             cat => defaultFieldsCache[cat] && Object.keys(defaultFieldsCache[cat]).length > 0
         );
         if (hasContent) return defaultFieldsCache;
-        // Cache is all-empty (previous fetch failure) — invalidate and retry
         console.log('[Agent-StateSync] Default fields cache was empty, retrying fetch...');
         defaultFieldsCache = null;
     }
@@ -142,8 +143,6 @@ async function loadDefaultCategory(category) {
 async function loadTrackedFields() {
     const saved = state.context.extensionSettings?.[TRACKED_FIELDS_KEY];
     if (saved && typeof saved === 'object') {
-        // Check if saved data has any actual field definitions.
-        // If all categories are empty objects, fall through to defaults.
         const categories = ['character', 'scenario', 'shared'];
         const hasContent = categories.some(cat => {
             const catData = saved[cat];
@@ -151,7 +150,6 @@ async function loadTrackedFields() {
         });
         if (hasContent) return saved;
     }
-    // Load defaults from JSON files
     return await loadDefaultFields();
 }
 
@@ -196,6 +194,160 @@ function buildTypeOptions(selected) {
 }
 
 // #############################################
+// # Dynamic Value Helpers
+// #############################################
+
+/**
+ * Normalize is_dynamic to a string value for the data-value attribute.
+ * false/undefined → "false"
+ * true → "True"
+ * string → string (e.g. "Per-Character", "Situation Based")
+ */
+function normalizeDynamicValue(val) {
+    if (!val || val === 'false') return 'false';
+    if (val === true) return 'True';
+    return String(val);
+}
+
+/**
+ * Convert a data-value string back to the stored is_dynamic value.
+ * "false" → false
+ * anything else → the string value
+ */
+function dynamicValueToStored(val) {
+    if (!val || val === 'false') return false;
+    return val;
+}
+
+// #############################################
+// # Icon Toggle Rendering
+// #############################################
+
+/**
+ * Render icon toggle buttons for a simple field.
+ * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue)
+ */
+function renderSimpleIcons({ secret, required, immutable, extendsOnly, allowSecret }) {
+    const secretBtn = allowSecret
+        ? `<button type="button" class="ass-tf-icon-btn ass-tf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
+                title="Secret — hidden from other characters">
+            <i class="fa-solid fa-eye-slash"></i>
+          </button>`
+        : '';
+
+    return `<div class="ass-tf-icon-group">
+        ${secretBtn}
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-required${required ? ' active' : ''}" data-active="${!!required}"
+                title="Required — must be provided">
+            <i class="fa-solid fa-asterisk"></i>
+        </button>
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
+                title="Immutable — will only be written during initialization">
+            <i class="fa-solid fa-lock"></i>
+        </button>
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-extend${extendsOnly ? ' active' : ''}" data-active="${!!extendsOnly}"
+                title="Extend — only extends, will not overwrite">
+            <i class="fa-solid fa-maximize"></i>
+        </button>
+    </div>`;
+}
+
+/**
+ * Render icon toggle buttons for a group field.
+ * Icons: Secret (purple), Required (orange), Immutable (red), Dynamic (green)
+ */
+function renderGroupIcons({ secret, required, immutable, isDynamic, allowSecret }) {
+    const dynValue = normalizeDynamicValue(isDynamic);
+    const dynActive = dynValue !== 'false';
+
+    const secretBtn = allowSecret
+        ? `<button type="button" class="ass-tf-icon-btn ass-tf-icon-secret${secret ? ' active' : ''}" data-active="${!!secret}"
+                title="Secret — hidden from other characters">
+            <i class="fa-solid fa-eye-slash"></i>
+          </button>`
+        : '';
+
+    return `<div class="ass-tf-icon-group">
+        ${secretBtn}
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-required${required ? ' active' : ''}" data-active="${!!required}"
+                title="Required — must be provided">
+            <i class="fa-solid fa-asterisk"></i>
+        </button>
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
+                title="Immutable — will only be written during initialization">
+            <i class="fa-solid fa-lock"></i>
+        </button>
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-dynamic${dynActive ? ' active' : ''}" data-value="${dynValue}"
+                title="Dynamic — entries keyed by name">
+            <i class="fa-solid fa-shuffle"></i>
+        </button>
+    </div>`;
+}
+
+// #############################################
+// # Dynamic Popup
+// #############################################
+
+/**
+ * Show the Dynamic popup for a group field's Dynamic icon.
+ * Options: Off, True, Per-Character, Situation Based
+ */
+function showDynamicPopup($btn) {
+    // Remove any existing popup
+    $('.ass-tf-dyn-popup').remove();
+    $(document).off('mousedown.ass-tf-dyn-popup');
+
+    const currentValue = $btn.attr('data-value') || 'false';
+
+    const options = [
+        { value: 'false', label: 'Off' },
+        { value: 'True', label: 'True' },
+        { value: 'Per-Character', label: 'Per-Character' },
+        { value: 'Situation-Based', label: 'Situation-Based' },
+    ];
+
+    const optionsHtml = options.map(opt =>
+        `<div class="ass-tf-dyn-option${opt.value === currentValue ? ' ass-tf-dyn-active' : ''}"
+             data-value="${opt.value}">${opt.label}</div>`
+    ).join('');
+
+    const $popup = $(`<div class="ass-tf-dyn-popup">${optionsHtml}</div>`);
+
+    // Position near the button
+    const btnRect = $btn[0].getBoundingClientRect();
+    $popup.css({
+        position: 'fixed',
+        top: btnRect.bottom + 4,
+        left: Math.max(4, btnRect.left - 60),
+        zIndex: 10002,
+    });
+
+    $('body').append($popup);
+
+    // Click handler for options
+    $popup.on('click', '.ass-tf-dyn-option', function () {
+        const newValue = $(this).attr('data-value');
+        $btn.attr('data-value', newValue);
+        const isActive = newValue !== 'false';
+        $btn.toggleClass('active', isActive);
+        $popup.remove();
+        $(document).off('mousedown.ass-tf-dyn-popup');
+        syncFieldsFromDOM();
+        scheduleSave();
+    });
+
+    // Click outside to close
+    setTimeout(() => {
+        $(document).on('mousedown.ass-tf-dyn-popup', function (e) {
+            if (!$(e.target).closest('.ass-tf-dyn-popup, .ass-tf-icon-dynamic').length) {
+                $popup.remove();
+                $(document).off('mousedown.ass-tf-dyn-popup');
+            }
+        });
+    }, 10);
+}
+
+// #############################################
 // # Render Functions
 // #############################################
 
@@ -227,7 +379,13 @@ function renderCategory({ key, label, open, allowSecret }) {
             <button class="menu_button ass-tf-add-field" data-category="${key}">
                 <i class="fa-solid fa-plus"></i> Add field
             </button>
-            <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults from ${label} JSON file">
+            <button class="menu_button ass-tf-add-group-field" data-category="${key}">
+                <i class="fa-solid fa-folder-plus"></i> Add group-field
+            </button>
+            <button class="menu_button ass-tf-save-defaults" data-category="${key}" title="Save current fields as default for ${label}">
+                <i class="fa-solid fa-floppy-disk"></i> Save as Default
+            </button>
+            <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults">
                 <i class="fa-solid fa-rotate-left"></i> Load Defaults
             </button>
         </div>
@@ -250,14 +408,9 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
     const secret = field.secret || false;
+    const required = field.required || false;
+    const immutable = field.immutable || false;
     const isNested = depth > 0;
-
-    const secretHtml = allowSecret
-        ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash"></i>
-           </label>`
-        : '';
 
     const addSubBtn = !isNested
         ? `<button class="menu_button ass-tf-add-sub-to-field"
@@ -267,6 +420,10 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
         : '';
 
     const depthClass = isNested ? 'ass-tf-nested' : '';
+
+    const iconsHtml = renderSimpleIcons({
+        secret, required, immutable, extendsOnly, allowSecret,
+    });
 
     return `
     <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
@@ -278,10 +435,7 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
             <select class="text_pole ass-tf-type">
                 ${buildTypeOptions(type)}
             </select>
-            <label class="ass-tf-extends-label" title="Only extends this and will not overwrite">
-                <input type="checkbox" class="ass-tf-extends" ${extendsOnly ? 'checked' : ''}>
-            </label>
-            ${secretHtml}
+            ${iconsHtml}
             ${addSubBtn}
             <button class="menu_button ass-tf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
@@ -290,47 +444,22 @@ function renderSimpleField(category, key, field, depth, allowSecret) {
     </div>`;
 }
 
-/**
- * Get the display label for an is_dynamic value.
- */
-function getDynamicLabel(isDynamic) {
-    if (isDynamic === 'Per-Character') return 'Per-Char';
-    if (isDynamic === 'Situation-Based') return 'Situat.';
-    if (isDynamic === true || isDynamic === 'True') return 'Auto';
-    return 'Off';
-}
-
-/**
- * Get the tooltip for an is_dynamic value.
- */
-function getDynamicTooltip(isDynamic) {
-    if (isDynamic === 'Per-Character') return 'Dynamic: Per-Character — entries keyed by character name';
-    if (isDynamic === 'Situation-Based') return 'Dynamic: Situation-Based — entries keyed by situation description';
-    if (isDynamic === true || isDynamic === 'True') return 'Dynamic: Auto — mode inferred from context';
-    return 'Not dynamic — click to set dynamic mode';
-}
-
 function renderGroupField(category, key, field, depth, allowSecret) {
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
-    const fields = field.fields || {};
     const secret = field.secret || false;
-
-    const dynLabel = getDynamicLabel(isDynamic);
-    const dynTooltip = getDynamicTooltip(isDynamic);
-    const dynActiveClass = isDynamic ? 'ass-tf-dyn-active' : '';
-
-    const secretHtml = allowSecret
-        ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
-               <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
-               <i class="fa-solid fa-eye-slash"></i>
-           </label>`
-        : '';
+    const required = field.required || false;
+    const immutable = field.immutable || false;
+    const fields = field.fields || {};
 
     let subfieldsHtml = '';
     for (const [subKey, subField] of Object.entries(fields)) {
         subfieldsHtml += renderField(category, subKey, subField, depth + 1, allowSecret);
     }
+
+    const iconsHtml = renderGroupIcons({
+        secret, required, immutable, isDynamic, allowSecret,
+    });
 
     return `
     <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
@@ -339,10 +468,7 @@ function renderGroupField(category, key, field, depth, allowSecret) {
                    placeholder="Group name">
             <input class="text_pole ass-tf-desc" value="${escapeAttr(description)}"
                    placeholder="Description">
-            <button class="menu_button ass-tf-dynamic-btn ${dynActiveClass}" data-dyn-value="${isDynamic === true ? 'true' : isDynamic === false ? 'false' : isDynamic}" title="${dynTooltip}">
-                <i class="fa-solid fa-shuffle"></i> <small>${dynLabel}</small>
-            </button>
-            ${secretHtml}
+            ${iconsHtml}
             <button class="menu_button ass-tf-remove-field" title="Remove group">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -367,92 +493,27 @@ function isGroup(field) {
     return field && field.fields !== undefined;
 }
 
-/**
- * Parse a dynamic value string from a data attribute into the proper JS value.
- * - "false" → false
- * - "true" → true
- * - "Per-Character" → "Per-Character"
- * - "Situation-Based" → "Situation-Based"
- */
-function parseDynamicValue(val) {
-    if (val === 'false') return false;
-    if (val === 'true') return true;
-    if (val === 'Per-Character' || val === 'Situation-Based') return val;
-    // Legacy: actual boolean/undefined from data model
-    return val || false;
-}
-
-/**
- * Show a popup near the Dynamic button with 3 options.
- * Clicking an option sets the is_dynamic value and re-renders.
- */
-function showDynamicPopup($btn) {
-    // Remove any existing popup
-    $('.ass-tf-dyn-popup').remove();
-
-    // Read current value from the button's data attribute
-    const currentVal = $btn.attr('data-dyn-value') || 'false';
-
-    const options = [
-        { value: 'true', label: 'Auto (inferred)', desc: 'Mode inferred from context — e.g. "reactions" → Situation-Based, "relationships" → Per-Character', icon: 'fa-wand-magic-sparkles' },
-        { value: 'Per-Character', label: 'Per-Character', desc: 'Entries keyed by character name — e.g. relationships per character', icon: 'fa-users' },
-        { value: 'Situation-Based', label: 'Situation-Based', desc: 'Entries keyed by situation — e.g. reaction/feeling per situation', icon: 'fa-bolt' },
-    ];
-
-    let optionsHtml = options.map(opt => {
-        const isSelected = currentVal === opt.value ? 'ass-tf-dyn-selected' : '';
-        return `<div class="ass-tf-dyn-option ${isSelected}" data-dyn-value="${opt.value}">
-            <div class="ass-tf-dyn-option-header">
-                <i class="fa-solid ${opt.icon}"></i>
-                <b>${opt.label}</b>
-            </div>
-            <small>${opt.desc}</small>
-        </div>`;
-    }).join('');
-
-    // Also add an "Off" option if currently active
-    if (currentVal !== 'false') {
-        optionsHtml += `<div class="ass-tf-dyn-option" data-dyn-value="false">
-            <div class="ass-tf-dyn-option-header">
-                <i class="fa-solid fa-xmark"></i>
-                <b>Off</b>
-            </div>
-            <small>Not dynamic — fixed sub-fields only</small>
-        </div>`;
-    }
-
-    const popupHtml = `<div class="ass-tf-dyn-popup" data-dyn-category="${$btn.closest('.ass-tf-field').attr('data-category')}" data-dyn-key="${$btn.closest('.ass-tf-field').attr('data-key')}">${optionsHtml}</div>`;
-
-    // Position popup below the button
-    const btnOffset = $btn.offset();
-    const btnHeight = $btn.outerHeight();
-
-    $('body').append(popupHtml);
-    const $popup = $('.ass-tf-dyn-popup');
-
-    // Position it
-    let top = btnOffset.top + btnHeight + 4;
-    let left = btnOffset.left;
-
-    // Ensure popup doesn't go off-screen
-    const popupWidth = $popup.outerWidth();
-    const popupHeight = $popup.outerHeight();
-    const windowWidth = $(window).width();
-    const windowHeight = $(window).height();
-
-    if (left + popupWidth > windowWidth - 10) {
-        left = windowWidth - popupWidth - 10;
-    }
-    if (top + popupHeight > windowHeight - 10) {
-        top = btnOffset.top - popupHeight - 4;
-    }
-
-    $popup.css({ top, left });
-}
-
 // #############################################
 // # DOM → Data Sync
 // #############################################
+
+/**
+ * Read icon toggle active state from a row's icon group.
+ */
+function readIconActive($row, selector) {
+    const $btn = $row.find('> .ass-tf-icon-group > ' + selector);
+    if (!$btn.length) return false;
+    return $btn.attr('data-active') === 'true';
+}
+
+/**
+ * Read Dynamic icon value from a row's icon group.
+ */
+function readDynamicValue($row) {
+    const $btn = $row.find('> .ass-tf-icon-group > .ass-tf-icon-dynamic');
+    if (!$btn.length) return false;
+    return dynamicValueToStored($btn.attr('data-value') || 'false');
+}
 
 /**
  * Read all current DOM values and sync them into currentFields.
@@ -480,21 +541,21 @@ function syncFieldsFromDOM() {
  * Recursively reads nested sub-fields.
  */
 function readFieldFromDOM($el) {
-    if ($el.hasClass('ass-tf-group')) {
-        // Read is_dynamic from the button's data attribute
-        const $dynBtn = $el.find('> .ass-tf-row > .ass-tf-dynamic-btn');
-        const dynVal = $dynBtn.attr('data-dyn-value') || 'false';
+    const $row = $el.find('> .ass-tf-row');
 
+    if ($el.hasClass('ass-tf-group')) {
         const result = {
-            description: ($el.find('> .ass-tf-row > .ass-tf-desc').val() || '').trim(),
-            is_dynamic: parseDynamicValue(dynVal),
+            description: ($row.find('> .ass-tf-desc').val() || '').trim(),
+            is_dynamic: readDynamicValue($row),
             fields: {},
         };
 
-        const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        const secret = readIconActive($row, '.ass-tf-icon-secret');
+        const required = readIconActive($row, '.ass-tf-icon-required');
+        const immutable = readIconActive($row, '.ass-tf-icon-immutable');
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         $el.children('.ass-tf-subfields').children('.ass-tf-field').each(function () {
             const subKey = String($(this).attr('data-key'));
@@ -504,15 +565,17 @@ function readFieldFromDOM($el) {
         return result;
     } else {
         const result = {
-            type: $el.find('> .ass-tf-row > .ass-tf-type').val() || 'string',
-            hint: ($el.find('> .ass-tf-row > .ass-tf-hint').val() || '').trim(),
-            extends_only: $el.find('> .ass-tf-row > .ass-tf-extends').is(':checked'),
+            type: $row.find('> .ass-tf-type').val() || 'string',
+            hint: ($row.find('> .ass-tf-hint').val() || '').trim(),
+            extends_only: readIconActive($row, '.ass-tf-icon-extend'),
         };
 
-        const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
-        if ($secret.length) {
-            result.secret = $secret.is(':checked');
-        }
+        const secret = readIconActive($row, '.ass-tf-icon-secret');
+        const required = readIconActive($row, '.ass-tf-icon-required');
+        const immutable = readIconActive($row, '.ass-tf-icon-immutable');
+        if (secret) result.secret = true;
+        if (required) result.required = true;
+        if (immutable) result.immutable = true;
 
         return result;
     }
@@ -556,7 +619,6 @@ function snapshotOpenCategories() {
 // #############################################
 
 function addField(category) {
-    // Sync DOM → currentFields first to preserve any unsaved edits
     syncFieldsFromDOM();
 
     const name = 'new_field_' + Date.now();
@@ -565,6 +627,8 @@ function addField(category) {
         type: 'string',
         hint: '',
         extends_only: false,
+        required: false,
+        immutable: false,
     };
     openCategories[category] = true;
     snapshotOpenCategories();
@@ -572,18 +636,89 @@ function addField(category) {
     scheduleSave();
 }
 
+function addGroupField(category) {
+    syncFieldsFromDOM();
+
+    const name = 'new_group_' + Date.now();
+    currentFields[category] = currentFields[category] || {};
+    currentFields[category][name] = {
+        description: '',
+        is_dynamic: false,
+        fields: {},
+        required: false,
+        immutable: false,
+    };
+    openCategories[category] = true;
+    snapshotOpenCategories();
+    renderAllCategories();
+    scheduleSave();
+}
+
+async function saveAsDefault(category) {
+    syncFieldsFromDOM();
+
+    const savedDefaults = state.context.extensionSettings?.[SAVED_DEFAULTS_KEY] || {};
+    savedDefaults[category] = JSON.parse(JSON.stringify(currentFields[category] || {}));
+    state.context.extensionSettings[SAVED_DEFAULTS_KEY] = savedDefaults;
+    state.context.saveSettingsDebounced();
+
+    toastr.success(`Saved current ${category} fields as default.`, 'Agent-StateSync');
+}
+
 async function loadDefaults(category) {
+    // Confirmation popup
+    const confirmed = await new Promise(resolve => {
+        const $confirm = $(`
+        <div class="ass-tf-overlay" style="z-index:10001;">
+            <div class="ass-tf-modal" style="width:380px;">
+                <div class="ass-tf-modal-header">
+                    <h3><i class="fa-solid fa-rotate-left"></i> Load Defaults</h3>
+                </div>
+                <div class="ass-tf-modal-body" style="padding:16px;">
+                    <p style="margin:0 0 12px;">This will replace all fields in this category with the saved defaults (or JSON file defaults if none saved). Continue?</p>
+                    <div style="display:flex; gap:8px; justify-content:flex-end;">
+                        <button class="menu_button ass-tf-confirm-cancel">Cancel</button>
+                        <button class="menu_button ass-tf-confirm-ok" style="background:rgba(231,76,60,0.15); border-color:rgba(231,76,60,0.3);">
+                            <i class="fa-solid fa-rotate-left"></i> Load Defaults
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>`);
+        $('body').append($confirm);
+        $confirm.on('click', '.ass-tf-confirm-ok', () => { $confirm.remove(); resolve(true); });
+        $confirm.on('click', '.ass-tf-confirm-cancel', () => { $confirm.remove(); resolve(false); });
+        $confirm.on('mousedown', function (e) {
+            if ($(e.target).is('.ass-tf-overlay')) { $confirm.remove(); resolve(false); }
+        });
+    });
+
+    if (!confirmed) return;
+
     try {
         // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
         syncFieldsFromDOM();
 
-        // Load and replace this category entirely
+        // Check for saved defaults first
+        const savedDefaults = state.context.extensionSettings?.[SAVED_DEFAULTS_KEY];
+        if (savedDefaults?.[category]) {
+            currentFields[category] = JSON.parse(JSON.stringify(savedDefaults[category]));
+            openCategories[category] = true;
+            snapshotOpenCategories();
+            renderAllCategories();
+            scheduleSave();
+            console.log(`[Agent-StateSync] Loaded saved defaults for "${category}"`);
+            toastr.success(`Loaded saved defaults for ${category}.`, 'Agent-StateSync');
+            return;
+        }
+
+        // Fall back to JSON file defaults
         const defaults = await loadDefaultCategory(category);
         const count = Object.keys(defaults).length;
         console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from JSON`);
 
         if (count === 0) {
-            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing or URL may be wrong. Base URL: ${getExtensionBaseUrl()}`);
+            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing. Base URL: ${getExtensionBaseUrl()}`);
             toastr.warning(`Could not load defaults for ${category} — JSON file not found. Check the browser console (F12) for details.`, 'Agent-StateSync');
             return;
         }
@@ -594,6 +729,7 @@ async function loadDefaults(category) {
         renderAllCategories();
         scheduleSave();
         console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
+        toastr.success(`Loaded JSON file defaults for ${category}.`, 'Agent-StateSync');
     } catch (err) {
         console.error(`[Agent-StateSync] loadDefaults("${category}") error:`, err);
         toastr.error(`Error loading defaults: ${err.message}`, 'Agent-StateSync');
@@ -623,14 +759,18 @@ function addSubFieldToGroup(category, key) {
             type: field.type || 'string',
             hint: field.hint || '',
             extends_only: field.extends_only || false,
+            required: false,
+            immutable: false,
         };
         field.description = field.hint || '';
+        // Keep meta properties on the group
+        // secret, required, immutable stay on the group
         delete field.type;
         delete field.hint;
         delete field.extends_only;
     } else {
         const subName = 'new_sub_' + Date.now();
-        field.fields[subName] = { type: 'string', hint: '', extends_only: false };
+        field.fields[subName] = { type: 'string', hint: '', extends_only: false, required: false, immutable: false };
     }
 
     snapshotOpenCategories();
@@ -652,6 +792,8 @@ function addSubGroup(category, key) {
             type: field.type || 'string',
             hint: field.hint || '',
             extends_only: field.extends_only || false,
+            required: false,
+            immutable: false,
         };
         field.description = field.hint || '';
         delete field.type;
@@ -664,6 +806,8 @@ function addSubGroup(category, key) {
         description: '',
         is_dynamic: false,
         fields: {},
+        required: false,
+        immutable: false,
     };
 
     snapshotOpenCategories();
@@ -730,9 +874,11 @@ function openTFModal() {
                     These are the global fields — per-character and per-persona additions
                     are configured in their respective brain panels.
                     <br><br>
-                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat (Character category only).
-                    <br>
-                    <i class="fa-solid fa-shuffle" style="color:#2ecc71;"></i> = Dynamic — click to choose mode: Auto / Per-Character / Situation-Based.
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters (Character category only).
+                    <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> = Required — must be provided.
+                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> = Immutable — will only be written during initialization.
+                    <i class="fa-solid fa-maximize" style="color:#3498db;"></i> = Extend — only extends, will not overwrite.
+                    <i class="fa-solid fa-shuffle" style="color:#27ae60;"></i> = Dynamic — entries keyed by name (click for options).
                     <br>
                     <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
                 </div>
@@ -767,11 +913,11 @@ function closeTFModal() {
     syncFieldsFromDOM();
     saveTrackedFields();
 
-    // Clean up popup and event handlers
-    $('.ass-tf-dyn-popup').remove();
-    $(document).off('.ass-tf-dyn');
     $('#ass-tf-overlay').remove();
     $(document).off('keydown.ass-tf-modal');
+    // Also clean up any stray dynamic popups
+    $('.ass-tf-dyn-popup').remove();
+    $(document).off('mousedown.ass-tf-dyn-popup');
 
     // Update the field count badge on the settings button
     updateTFButton();
@@ -834,15 +980,19 @@ function bindModalEvents() {
         scheduleSave();
     });
 
-    // Checkbox changes — live sync + save
-    $modal.on('change.ass-tf', '.ass-tf-extends, .ass-tf-secret', function () {
+    // --- Icon toggle clicks ---
+    $modal.on('click.ass-tf', '.ass-tf-icon-secret, .ass-tf-icon-required, .ass-tf-icon-immutable, .ass-tf-icon-extend', function (e) {
+        e.stopPropagation();
+        const $btn = $(this);
+        const isActive = $btn.attr('data-active') === 'true';
+        $btn.attr('data-active', !isActive);
+        $btn.toggleClass('active', !isActive);
         syncFieldsFromDOM();
         scheduleSave();
     });
 
-    // Dynamic button — open popup selector
-    $modal.on('click.ass-tf', '.ass-tf-dynamic-btn', function (e) {
-        e.preventDefault();
+    // --- Dynamic icon click — show popup ---
+    $modal.on('click.ass-tf', '.ass-tf-icon-dynamic', function (e) {
         e.stopPropagation();
         showDynamicPopup($(this));
     });
@@ -850,6 +1000,16 @@ function bindModalEvents() {
     // Add field
     $modal.on('click.ass-tf', '.ass-tf-add-field', function () {
         addField($(this).attr('data-category'));
+    });
+
+    // Add group-field
+    $modal.on('click.ass-tf', '.ass-tf-add-group-field', function () {
+        addGroupField($(this).attr('data-category'));
+    });
+
+    // Save as default
+    $modal.on('click.ass-tf', '.ass-tf-save-defaults', async function () {
+        await saveAsDefault($(this).attr('data-category'));
     });
 
     // Load defaults
@@ -876,40 +1036,6 @@ function bindModalEvents() {
     // Add sub-field to group
     $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
         addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
-    });
-
-    // Dynamic popup: option selection (bound on document since popup is outside modal)
-    $(document).on('click.ass-tf-dyn', '.ass-tf-dyn-option', function () {
-        const rawValue = $(this).attr('data-dyn-value');
-        const value = parseDynamicValue(rawValue);
-
-        // The popup stores a reference to the group's category and key
-        const category = $(this).closest('.ass-tf-dyn-popup').attr('data-dyn-category');
-        const key = $(this).closest('.ass-tf-dyn-popup').attr('data-dyn-key');
-
-        // Sync DOM → currentFields first to preserve other edits
-        syncFieldsFromDOM();
-
-        const field = findField(currentFields[category], key);
-        if (field) {
-            field.is_dynamic = value;
-        }
-
-        // Re-render
-        snapshotOpenCategories();
-        renderAllCategories();
-        scheduleSave();
-
-        // Remove popup
-        $('.ass-tf-dyn-popup').remove();
-    });
-
-    // Dynamic popup: close when clicking outside
-    $(document).on('mousedown.ass-tf-dyn', function (e) {
-        const $popup = $('.ass-tf-dyn-popup');
-        if ($popup.length && !$(e.target).closest('.ass-tf-dyn-popup, .ass-tf-dynamic-btn').length) {
-            $popup.remove();
-        }
     });
 
     // Add sub-field via sitemap button (converts to group)
@@ -1024,9 +1150,6 @@ function injectCSS() {
     }
 
     /* Modal body */
-    .ass-tf-modal-body {
-        /* just a wrapper */
-    }
     .ass-tf-modal-info {
         font-size: 11px;
         color: var(--fg_dim);
@@ -1068,6 +1191,7 @@ function injectCSS() {
         margin: 8px 0 4px 0;
         display: flex;
         gap: 6px;
+        flex-wrap: wrap;
     }
 
     /* Tracked field containers */
@@ -1114,111 +1238,75 @@ function injectCSS() {
         gap: 6px;
     }
 
-    /* Checkbox labels */
-    .ass-tf-extends-label,
-    .ass-tf-secret-label {
+    /* Icon toggle buttons */
+    .ass-tf-icon-group {
         display: flex;
         align-items: center;
-        gap: 3px;
+        gap: 2px;
+        flex-shrink: 0;
+    }
+    .ass-tf-icon-btn {
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        padding: 2px 5px;
         cursor: pointer;
-        flex-shrink: 0;
         font-size: 12px;
-        white-space: nowrap;
-        color: var(--fg_dim);
+        line-height: 1;
+        transition: all 0.15s;
+        opacity: 0.3;
     }
-    .ass-tf-secret-label {
-        color: #9b59b6;
+    .ass-tf-icon-btn:hover {
+        opacity: 0.7;
     }
-    .ass-tf-secret-label input,
-    .ass-tf-extends-label input {
-        margin: 0;
-        width: 14px;
-        height: 14px;
-    }
-
-    /* Dynamic mode button */
-    .ass-tf-dynamic-btn {
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 8px !important;
-        font-size: 11px;
-        opacity: 0.6;
-        border: 1px solid rgba(46, 204, 113, 0.2) !important;
-        transition: opacity 0.2s, border-color 0.2s;
-    }
-    .ass-tf-dynamic-btn:hover {
+    .ass-tf-icon-btn.active {
         opacity: 1;
-        border-color: rgba(46, 204, 113, 0.5) !important;
     }
-    .ass-tf-dynamic-btn.ass-tf-dyn-active {
-        opacity: 1;
-        border-color: rgba(46, 204, 113, 0.6) !important;
-        background: rgba(46, 204, 113, 0.12) !important;
-    }
-    .ass-tf-dynamic-btn.ass-tf-dyn-active i {
-        color: #2ecc71;
-    }
+    .ass-tf-icon-secret { color: #9b59b6; }
+    .ass-tf-icon-secret.active { background: rgba(155, 89, 182, 0.15); border-color: rgba(155, 89, 182, 0.3); }
+    .ass-tf-icon-required { color: #e67e22; }
+    .ass-tf-icon-required.active { background: rgba(230, 126, 34, 0.15); border-color: rgba(230, 126, 34, 0.3); }
+    .ass-tf-icon-immutable { color: #e74c3c; }
+    .ass-tf-icon-immutable.active { background: rgba(231, 76, 60, 0.15); border-color: rgba(231, 76, 60, 0.3); }
+    .ass-tf-icon-extend { color: #3498db; }
+    .ass-tf-icon-extend.active { background: rgba(52, 152, 219, 0.15); border-color: rgba(52, 152, 219, 0.3); }
+    .ass-tf-icon-dynamic { color: #27ae60; }
+    .ass-tf-icon-dynamic.active { background: rgba(39, 174, 96, 0.15); border-color: rgba(39, 174, 96, 0.3); }
 
     /* Dynamic popup */
     .ass-tf-dyn-popup {
-        position: fixed;
-        z-index: 10001;
         background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.98));
-        border: 1px solid rgba(46, 204, 113, 0.3);
-        border-radius: 8px;
-        padding: 8px;
-        min-width: 260px;
-        max-width: 320px;
+        border: 1px solid rgba(128, 128, 128, 0.3);
+        border-radius: 6px;
+        padding: 4px 0;
+        min-width: 150px;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-        animation: ass-tf-dyn-pop-in 0.12s ease-out;
-    }
-    @keyframes ass-tf-dyn-pop-in {
-        from { opacity: 0; transform: translateY(-4px); }
-        to { opacity: 1; transform: translateY(0); }
     }
     .ass-tf-dyn-option {
-        padding: 8px 10px;
-        border-radius: 5px;
+        padding: 6px 12px;
+        font-size: 12px;
         cursor: pointer;
-        transition: background 0.15s;
-        margin-bottom: 4px;
+        color: var(--fg_dim);
+        transition: background 0.1s, color 0.1s;
     }
-    .ass-tf-dyn-option:last-child { margin-bottom: 0; }
     .ass-tf-dyn-option:hover {
-        background: rgba(46, 204, 113, 0.1);
-    }
-    .ass-tf-dyn-option.ass-tf-dyn-selected {
-        background: rgba(46, 204, 113, 0.15);
-        border-left: 3px solid #2ecc71;
-    }
-    .ass-tf-dyn-option-header {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        margin-bottom: 2px;
+        background: rgba(128, 128, 128, 0.15);
         color: var(--fg);
     }
-    .ass-tf-dyn-option-header i {
-        color: #2ecc71;
-        width: 14px;
-        text-align: center;
-    }
-    .ass-tf-dyn-option.ass-tf-dyn-selected .ass-tf-dyn-option-header i {
+    .ass-tf-dyn-active {
         color: #27ae60;
+        font-weight: 600;
     }
-    .ass-tf-dyn-option small {
-        color: var(--fg_dim);
-        line-height: 1.4;
-        display: block;
-        padding-left: 20px;
+    .ass-tf-dyn-active::before {
+        content: '\\2713 ';
     }
 
-    /* Load defaults button */
+    /* Save / Load defaults buttons */
+    .ass-tf-save-defaults,
     .ass-tf-load-defaults {
         opacity: 0.7;
     }
+    .ass-tf-save-defaults:hover,
     .ass-tf-load-defaults:hover {
         opacity: 1;
     }

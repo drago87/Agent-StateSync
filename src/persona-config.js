@@ -59,6 +59,8 @@ function migrateTFAdditionsToArray(obj) {
                 description: field.description || '',
                 is_dynamic: field.is_dynamic || false,
                 secret: field.secret || false,
+                required: field.required || false,
+                immutable: field.immutable || false,
                 fields: migrateTFAdditionsToArray(field.fields),
             };
         }
@@ -68,6 +70,8 @@ function migrateTFAdditionsToArray(obj) {
             hint: field.hint || '',
             extends_only: field.extends_only || false,
             secret: field.secret || false,
+            required: field.required || false,
+            immutable: field.immutable || false,
         };
     });
 }
