@@ -54,25 +54,29 @@ function migrateTFAdditionsToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj || [];
     return Object.entries(obj).map(([name, field]) => {
         if (field && field.fields !== undefined) {
-            return {
+            const entry = {
                 name: name,
                 description: field.description || '',
-                is_dynamic: field.is_dynamic || false,
-                secret: field.secret || false,
-                required: field.required || false,
-                immutable: field.immutable || false,
                 fields: migrateTFAdditionsToArray(field.fields),
             };
+            if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+            if (field.extends_only) entry.extends_only = true;
+            if (field.secret) entry.secret = true;
+            if (field.required) entry.required = true;
+            if (field.immutable) entry.immutable = true;
+            return entry;
         }
-        return {
+        const entry = {
             name: name,
             type: field.type || 'string',
             hint: field.hint || '',
-            extends_only: field.extends_only || false,
-            secret: field.secret || false,
-            required: field.required || false,
-            immutable: field.immutable || false,
         };
+        if (field.extends_only) entry.extends_only = true;
+        if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+        if (field.secret) entry.secret = true;
+        if (field.required) entry.required = true;
+        if (field.immutable) entry.immutable = true;
+        return entry;
     });
 }
 

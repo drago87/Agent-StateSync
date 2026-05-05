@@ -8,6 +8,14 @@
 // via fetchLlmConfig() which calls GET /api/backends/health, and updates
 // state.agentLlmConfig + the read-only UI displays.
 //
+// Agent /health response format (new):
+// {
+//   "status": "ok",
+//   "last_changed": "2026-05-04@02h-41m-00s-888ms",
+//   "rp_llm": { "alias": "http://localhost:5001", "health": "Disabled" },
+//   "instruct_backends": [{ "alias": "PC", "health": "Healthy" }, { "alias": "Laptop", "health": "unknown" }]
+// }
+//
 // Agent /api/backends/health response format:
 // {
 //   "last_changed": "2026-05-02@23h-54m-56s-787ms",
@@ -20,7 +28,7 @@
 //   - "unknown":   LLM enabled but not running / connection refused / timeout
 //   - "Unhealthy": HTTP error (e.g. 500) — server reachable but broken
 //   - "Disabled":  LLM disabled in Agent config
-// File Version: 2.2.0
+// File Version: 2.2.1
 
 import state from './state.js';
 import {
@@ -124,8 +132,20 @@ function getHealthLabel(health) {
 }
 
 /**
+ * Compare two last_changed timestamps.
+ * Format: "YYYY-MM-DD@HHh-MMm-SSs-MSms" (zero-padded, lexicographically comparable).
+ * Returns true if `a` is strictly newer than `b`.
+ */
+function isNewerTimestamp(a, b) {
+    if (!a) return false;
+    if (!b) return true;
+    return a > b;
+}
+
+/**
  * Fetch LLM config and health from Agent via GET /api/backends/health.
- * Stores result in state.agentLlmConfig and updates the read-only display.
+ * Compares last_changed with the saved state.lastChanged to decide whether
+ * the display needs updating. Always stores the newest last_changed value.
  * Called on first connect, reconnect, and when config changes are detected.
  */
 export async function fetchLlmConfig() {
@@ -156,10 +176,21 @@ export async function fetchLlmConfig() {
             return null;
         });
         if (!data) return;
-        storeLlmConfig(data);
-        // storeLlmConfig() dispatches 'ass-llm-config-changed' which
-        // triggers updateLlmDisplay() via the event listener below.
-        console.log(`[${EXTENSION_NAME}] LLM config fetched from /api/backends/health:`, state.agentLlmConfig);
+
+        const responseLastChanged = data.last_changed || null;
+        const configChanged = isNewerTimestamp(responseLastChanged, state.lastChanged);
+
+        if (configChanged) {
+            // LLM config has changed since last health check — update the display
+            storeLlmConfig(data);
+            console.log(`[${EXTENSION_NAME}] LLM config updated from /api/backends/health (last_changed: ${responseLastChanged}):`, state.agentLlmConfig);
+        } else {
+            // Same or older — no display update needed, but still store last_changed
+            if (responseLastChanged) {
+                state.lastChanged = responseLastChanged;
+            }
+            console.log(`[${EXTENSION_NAME}] /api/backends/health last_changed unchanged (${responseLastChanged}), no display update needed`);
+        }
     } catch (e) {
         console.debug(`[${EXTENSION_NAME}] /api/backends/health fetch failed:`, e.message);
     }
@@ -238,7 +269,7 @@ export function updateLlmDisplay() {
             updateStatus('RP LLM not responding — start the LLM server', '#f0ad4e');
         }
     } else if (!hasInstruct && state.agentConnected) {
-        updateStatus('No healthy Instruct backend — init unavailable', '#f0ad4e');
+        updateStatus('No healthy Instruct backend — init will proceed anyway', '#f0ad4e');
     }
 }
 
@@ -261,7 +292,9 @@ function getHealthCheckUrl() {
 
 /**
  * Ping the Agent's /health endpoint.
- * On success, also fetches LLM status from /api/backends/health.
+ * Parses the new response format (status, last_changed, rp_llm, instruct_backends).
+ * Always saves last_changed to state. Stores LLM config if present in response.
+ * On success, also fetches LLM status from /api/backends/health as a follow-up.
  */
 export async function checkAgentHealth() {
     const url = getHealthCheckUrl();
@@ -285,8 +318,26 @@ export async function checkAgentHealth() {
 
         if (resp.ok) {
             const data = await resp.json().catch(() => ({}));
-            const sessionCount = data.sessions || 0;
-            setConnectionStatus(true, `Connected - ${sessionCount} session(s)`);
+
+            // --- Parse new /health response format ---
+            // { status, last_changed, rp_llm, instruct_backends }
+            const isHealthy = data.status === 'ok';
+
+            // Always save last_changed from the health response
+            if (data.last_changed) {
+                state.lastChanged = data.last_changed;
+            }
+
+            // Store LLM config (rp_llm / instruct_backends) if present
+            if (data.rp_llm || data.instruct_backends) {
+                storeLlmConfig(data);
+            }
+
+            if (isHealthy) {
+                setConnectionStatus(true, 'Connected');
+            } else {
+                setConnectionStatus(true, 'Connected (status: ' + (data.status || 'unknown') + ')');
+            }
 
             // Ping the dashboard so the ST Extension light stays green
             pingAgent(url);

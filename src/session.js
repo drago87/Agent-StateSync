@@ -20,16 +20,19 @@
 //   After session creation, fetchLlmConfig() is called to compare
 //   last_changed with /api/backends/health and update if newer.
 //
-// Health guards:
-//   - At least one Instruct backend must be "Healthy" to init a session
-//   - RP LLM must be "Healthy" for message generation
-// File Version: 1.7.0
+// Health guards (manual init):
+//   - RP LLM status is ignored for init (only matters for message generation)
+//   - At least one Instruct backend must be "Healthy" for init to proceed
+//   - If some Instruct backends are unhealthy but at least one is Healthy,
+//     init proceeds with a warning (may go slower)
+//   - If NO Instruct backends are Healthy, init is blocked with an error
+// File Version: 1.9.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
     getSettings, isBypassMode, syncConfigToAgent, storeLlmConfig,
-    isRpLlmHealthy, hasHealthyInstructBackend, updateStatus,
+    updateStatus,
 } from './settings.js';
 import { getAgentOrigin, fetchLlmConfig } from './agent-url.js';
 import { loadGroupData } from './groups.js';
@@ -236,16 +239,25 @@ async function showNewChatConfirm(origin, chatId) {
         ? `Group "${state.activeGroup.name}" (${state.activeGroupCharacters.length} members)`
         : `Character "${state.context.name2 || 'Unknown'}"`;
 
-    // Check LLM health and add warnings
-    const rpHealthy = isRpLlmHealthy();
-    const instructHealthy = hasHealthyInstructBackend();
+    // Check Instruct backend health for warnings
+    // RP LLM status is ignored for init — only Instruct backends matter
+    const instructBackends = state.agentLlmConfig.instruct_backends;
+    const healthyCount = instructBackends.filter(b => b.health === 'Healthy').length;
+    const totalCount = instructBackends.length;
 
     let warningHtml = '';
-    if (!instructHealthy) {
-        warningHtml += `<p style="margin:0 0 8px 0; color:#f0ad4e;"><i class="fa-solid fa-triangle-exclamation"></i> No healthy Instruct backend — session init will not work until at least one is Healthy.</p>`;
-    }
-    if (!rpHealthy) {
-        warningHtml += `<p style="margin:0 0 8px 0; color:#f0ad4e;"><i class="fa-solid fa-triangle-exclamation"></i> RP LLM is not Healthy — message generation will not work.</p>`;
+    if (healthyCount === 0) {
+        if (totalCount === 0) {
+            warningHtml += `<p style="margin:0 0 8px 0; color:#d9534f;"><i class="fa-solid fa-circle-xmark"></i> No Instruct LLM backends detected. At least one must be Healthy to initialize.</p>`;
+        } else {
+            warningHtml += `<p style="margin:0 0 8px 0; color:#d9534f;"><i class="fa-solid fa-circle-xmark"></i> No healthy Instruct LLM backend. At least one must be Healthy to initialize.</p>`;
+        }
+    } else if (healthyCount < totalCount) {
+        const unhealthyNames = instructBackends
+            .filter(b => b.health !== 'Healthy')
+            .map(b => b.alias || 'unknown')
+            .join(', ');
+        warningHtml += `<p style="margin:0 0 8px 0; color:#f0ad4e;"><i class="fa-solid fa-triangle-exclamation"></i> ${totalCount - healthyCount} Instruct LLM(s) not healthy: ${unhealthyNames}. Init may be slower.</p>`;
     }
 
     const popupHtml = `
@@ -462,9 +474,11 @@ export async function ensureSession(backendOrigin) {
  * Creates a session if needed, initializes it, and starts polling.
  *
  * Health guards:
- *   - At least one Instruct backend must be "Healthy" to init (hard block).
- *   - If RP LLM is not "Healthy", warns the user (init still proceeds
- *     since session setup doesn't require the RP LLM).
+ *   - Fetches fresh health data before checking.
+ *   - RP LLM status is ignored (only relevant for message generation, not init).
+ *   - If at least one Instruct backend is healthy, init proceeds.
+ *     If some are unhealthy, a warning is shown (may be slower).
+ *   - If NO Instruct backends are healthy, init is blocked with an error.
  *
  * @returns {boolean} true if successful
  */
@@ -475,23 +489,52 @@ export async function manualInitSession() {
         return false;
     }
 
-    // --- Check Instruct backend health ---
-    if (!hasHealthyInstructBackend()) {
-        toastr.error(
-            'No healthy Instruct LLM backend. Session init requires at least one Healthy backend.',
-            'Agent-StateSync'
-        );
-        return false;
+    // --- Fetch fresh health data before checking ---
+    // The health data may not be loaded yet (initial state is empty arrays).
+    // Fetch from the Agent so we have current LLM status.
+    try {
+        await fetchLlmConfig();
+    } catch (e) {
+        console.warn(`[${EXTENSION_NAME}] Health data fetch failed before init:`, e.message);
     }
 
-    // --- Check RP LLM health ---
-    if (!isRpLlmHealthy()) {
-        const rpHealth = state.agentLlmConfig.rp_llm.health;
+    // --- Check Instruct backend health (required for init) ---
+    // Init requires at least one Healthy Instruct LLM to process the payload.
+    // - All healthy  → proceed normally
+    // - Some healthy → proceed with warning (may be slower)
+    // - None healthy → block init with error
+    const instructBackends = state.agentLlmConfig.instruct_backends;
+    const healthyCount = instructBackends.filter(b => b.health === 'Healthy').length;
+    const totalCount = instructBackends.length;
+
+    if (healthyCount === 0) {
+        // No healthy Instruct backends — block init
+        if (totalCount === 0) {
+            toastr.error(
+                'No Instruct LLM backends detected. At least one must be Healthy to initialize.',
+                'Agent-StateSync'
+            );
+        } else {
+            const statuses = instructBackends.map(b => `${b.alias || 'unknown'}: ${b.health}`).join(', ');
+            toastr.error(
+                `No healthy Instruct LLM backend (${statuses}). At least one must be Healthy to initialize.`,
+                'Agent-StateSync'
+            );
+        }
+        updateStatus('Init blocked — no healthy Instruct LLM', '#d9534f');
+        return false;
+    } else if (healthyCount < totalCount) {
+        // Some but not all healthy — proceed with warning
+        const unhealthyNames = instructBackends
+            .filter(b => b.health !== 'Healthy')
+            .map(b => `${b.alias || 'unknown'} (${b.health})`)
+            .join(', ');
         toastr.warning(
-            `RP LLM is ${rpHealth || 'not responding'}. Message generation will not work until it is Healthy.`,
+            `${totalCount - healthyCount} Instruct LLM(s) not healthy: ${unhealthyNames}. Init will proceed but may be slower.`,
             'Agent-StateSync'
         );
     }
+    // If all healthy, no warning needed — proceed silently
 
     try {
         const sessionId = await ensureSession(origin);

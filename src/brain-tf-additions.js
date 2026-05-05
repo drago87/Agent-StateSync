@@ -247,25 +247,29 @@ function migrateObjectToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
     return Object.entries(obj).map(([name, field]) => {
         if (field && field.fields !== undefined) {
-            return {
+            const entry = {
                 name: name,
                 description: field.description || '',
-                is_dynamic: field.is_dynamic || false,
-                secret: field.secret || false,
-                required: field.required || false,
-                immutable: field.immutable || false,
                 fields: migrateObjectToArray(field.fields),
             };
+            if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+            if (field.extends_only) entry.extends_only = true;
+            if (field.secret) entry.secret = true;
+            if (field.required) entry.required = true;
+            if (field.immutable) entry.immutable = true;
+            return entry;
         }
-        return {
+        const entry = {
             name: name,
             type: field.type || 'string',
             hint: field.hint || '',
-            extends_only: field.extends_only || false,
-            secret: field.secret || false,
-            required: field.required || false,
-            immutable: field.immutable || false,
         };
+        if (field.extends_only) entry.extends_only = true;
+        if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+        if (field.secret) entry.secret = true;
+        if (field.required) entry.required = true;
+        if (field.immutable) entry.immutable = true;
+        return entry;
     });
 }
 
@@ -495,14 +499,16 @@ function readAdditionFieldFromDOM($el) {
         const result = {
             name: ($row.find('> .ass-btf-name').val() || '').trim(),
             description: ($row.find('> .ass-btf-desc').val() || '').trim(),
-            is_dynamic: readDynamicValue($row),
-            extends_only: readIconActive($row, '.ass-btf-icon-extend'),
             fields: [],
         };
 
+        const isDynamic = readDynamicValue($row);
+        const extendsOnly = readIconActive($row, '.ass-btf-icon-extend');
         const secret = readIconActive($row, '.ass-btf-icon-secret');
         const required = readIconActive($row, '.ass-btf-icon-required');
         const immutable = readIconActive($row, '.ass-btf-icon-immutable');
+        if (isDynamic) result.is_dynamic = isDynamic;
+        if (extendsOnly) result.extends_only = true;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (immutable) result.immutable = true;
@@ -517,13 +523,15 @@ function readAdditionFieldFromDOM($el) {
             name: ($row.find('> .ass-btf-name').val() || '').trim(),
             type: $row.find('> .ass-btf-type').val() || 'string',
             hint: ($row.find('> .ass-btf-hint').val() || '').trim(),
-            extends_only: readIconActive($row, '.ass-btf-icon-extend'),
-            is_dynamic: readDynamicValue($row),
         };
 
+        const extendsOnly = readIconActive($row, '.ass-btf-icon-extend');
+        const isDynamic = readDynamicValue($row);
         const secret = readIconActive($row, '.ass-btf-icon-secret');
         const required = readIconActive($row, '.ass-btf-icon-required');
         const immutable = readIconActive($row, '.ass-btf-icon-immutable');
+        if (extendsOnly) result.extends_only = true;
+        if (isDynamic) result.is_dynamic = isDynamic;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (immutable) result.immutable = true;
@@ -648,11 +656,10 @@ function removeFromAdditions(additions, path) {
                     name: current.name,
                     type: 'string',
                     hint: current.description || '',
-                    extends_only: false,
-                    required: false,
-                    immutable: false,
                 };
-                if (current.secret) simpleField.secret = current.secret;
+                if (current.secret) simpleField.secret = true;
+                if (current.required) simpleField.required = true;
+                if (current.immutable) simpleField.immutable = true;
                 parentArray[parentIndex] = simpleField;
             }
         }
@@ -810,26 +817,29 @@ function trackedFieldToEntry(key, field) {
             const subEntry = trackedFieldToEntry(subKey, subField);
             if (subEntry) subEntries.push(subEntry);
         }
-        return {
+        const entry = {
             name: key,
             description: field.description || '',
-            is_dynamic: field.is_dynamic || false,
-            secret: field.secret || false,
-            required: field.required || false,
-            immutable: field.immutable || false,
             fields: subEntries,
         };
+        if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+        if (field.secret) entry.secret = true;
+        if (field.required) entry.required = true;
+        if (field.immutable) entry.immutable = true;
+        return entry;
     }
 
-    return {
+    const entry = {
         name: key,
         type: field.type || 'string',
         hint: field.hint || '',
-        extends_only: field.extends_only || false,
-        secret: field.secret || false,
-        required: field.required || false,
-        immutable: field.immutable || false,
     };
+    if (field.extends_only) entry.extends_only = true;
+    if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+    if (field.secret) entry.secret = true;
+    if (field.required) entry.required = true;
+    if (field.immutable) entry.immutable = true;
+    return entry;
 }
 
 // #############################################
@@ -853,7 +863,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const category = $(this).attr('data-category');
         const additions = readTFAdditionsFromUI(panelSelector);
         if (!additions[category]) additions[category] = [];
-        additions[category].push({ name: '', type: 'string', hint: '', extends_only: false, required: false, immutable: false });
+        additions[category].push({ name: '', type: 'string', hint: '' });
         openCategories[category] = true;
         renderTFContainer(additions, panelSelector);
     });
@@ -863,7 +873,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const category = $(this).attr('data-category');
         const additions = readTFAdditionsFromUI(panelSelector);
         if (!additions[category]) additions[category] = [];
-        additions[category].push({ name: '', description: '', is_dynamic: false, fields: [], required: false, immutable: false });
+        additions[category].push({ name: '', description: '', fields: [] });
         openCategories[category] = true;
         renderTFContainer(additions, panelSelector);
     });
@@ -887,16 +897,15 @@ export function bindTFAdditionEvents(panelSelector = '') {
         if (!entry) return;
 
         if (isGroupEntry(entry)) {
-            entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false, required: false, immutable: false });
+            entry.fields.push({ name: '', type: 'string', hint: '' });
         } else {
-            entry.fields = [{
+            const subField = {
                 name: 'sub_1',
                 type: entry.type || 'string',
                 hint: '',
-                extends_only: entry.extends_only || false,
-                required: false,
-                immutable: false,
-            }];
+            };
+            if (entry.extends_only) subField.extends_only = true;
+            entry.fields = [subField];
             entry.description = entry.hint || '';
             delete entry.type;
             delete entry.hint;
@@ -913,7 +922,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
         const entry = findEntryByPath(additions, path);
         if (!entry || !isGroupEntry(entry)) return;
 
-        entry.fields.push({ name: '', type: 'string', hint: '', extends_only: false, required: false, immutable: false });
+        entry.fields.push({ name: '', type: 'string', hint: '' });
         renderTFContainer(additions, panelSelector);
     });
 
@@ -926,14 +935,13 @@ export function bindTFAdditionEvents(panelSelector = '') {
         if (!entry) return;
 
         if (!isGroupEntry(entry)) {
-            entry.fields = [{
+            const subField = {
                 name: 'sub_1',
                 type: entry.type || 'string',
                 hint: '',
-                extends_only: entry.extends_only || false,
-                required: false,
-                immutable: false,
-            }];
+            };
+            if (entry.extends_only) subField.extends_only = true;
+            entry.fields = [subField];
             entry.description = entry.hint || '';
             delete entry.type;
             delete entry.hint;
@@ -943,10 +951,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
         entry.fields.push({
             name: '',
             description: '',
-            is_dynamic: false,
             fields: [],
-            required: false,
-            immutable: false,
         });
         renderTFContainer(additions, panelSelector);
     });

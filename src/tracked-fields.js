@@ -523,14 +523,16 @@ function readFieldFromDOM($el) {
     if ($el.hasClass('ass-tf-group')) {
         const result = {
             description: ($row.find('> .ass-tf-desc').val() || '').trim(),
-            is_dynamic: readDynamicValue($row),
-            extends_only: readIconActive($row, '.ass-tf-icon-extend'),
             fields: {},
         };
 
+        const isDynamic = readDynamicValue($row);
+        const extendsOnly = readIconActive($row, '.ass-tf-icon-extend');
         const secret = readIconActive($row, '.ass-tf-icon-secret');
         const required = readIconActive($row, '.ass-tf-icon-required');
         const immutable = readIconActive($row, '.ass-tf-icon-immutable');
+        if (isDynamic) result.is_dynamic = isDynamic;
+        if (extendsOnly) result.extends_only = true;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (immutable) result.immutable = true;
@@ -545,13 +547,15 @@ function readFieldFromDOM($el) {
         const result = {
             type: $row.find('> .ass-tf-type').val() || 'string',
             hint: ($row.find('> .ass-tf-hint').val() || '').trim(),
-            extends_only: readIconActive($row, '.ass-tf-icon-extend'),
-            is_dynamic: readDynamicValue($row),
         };
 
+        const extendsOnly = readIconActive($row, '.ass-tf-icon-extend');
+        const isDynamic = readDynamicValue($row);
         const secret = readIconActive($row, '.ass-tf-icon-secret');
         const required = readIconActive($row, '.ass-tf-icon-required');
         const immutable = readIconActive($row, '.ass-tf-icon-immutable');
+        if (extendsOnly) result.extends_only = true;
+        if (isDynamic) result.is_dynamic = isDynamic;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (immutable) result.immutable = true;
@@ -605,9 +609,6 @@ function addField(category) {
     currentFields[category][name] = {
         type: 'string',
         hint: '',
-        extends_only: false,
-        required: false,
-        immutable: false,
     };
     openCategories[category] = true;
     snapshotOpenCategories();
@@ -622,10 +623,7 @@ function addGroupField(category) {
     currentFields[category] = currentFields[category] || {};
     currentFields[category][name] = {
         description: '',
-        is_dynamic: false,
         fields: {},
-        required: false,
-        immutable: false,
     };
     openCategories[category] = true;
     snapshotOpenCategories();
@@ -733,14 +731,13 @@ function addSubFieldToGroup(category, key) {
     if (!field) return;
 
     if (!isGroup(field)) {
-        field.fields = {};
-        field.fields['sub_1'] = {
+        const subField = {
             type: field.type || 'string',
             hint: field.hint || '',
-            extends_only: field.extends_only || false,
-            required: false,
-            immutable: false,
         };
+        if (field.extends_only) subField.extends_only = true;
+        field.fields = {};
+        field.fields['sub_1'] = subField;
         field.description = field.hint || '';
         // Keep meta properties on the group
         // secret, required, immutable stay on the group
@@ -749,7 +746,7 @@ function addSubFieldToGroup(category, key) {
         delete field.extends_only;
     } else {
         const subName = 'new_sub_' + Date.now();
-        field.fields[subName] = { type: 'string', hint: '', extends_only: false, required: false, immutable: false };
+        field.fields[subName] = { type: 'string', hint: '' };
     }
 
     snapshotOpenCategories();
@@ -766,14 +763,13 @@ function addSubGroup(category, key) {
     if (!field) return;
 
     if (!isGroup(field)) {
-        field.fields = {};
-        field.fields['sub_1'] = {
+        const subField = {
             type: field.type || 'string',
             hint: field.hint || '',
-            extends_only: field.extends_only || false,
-            required: false,
-            immutable: false,
         };
+        if (field.extends_only) subField.extends_only = true;
+        field.fields = {};
+        field.fields['sub_1'] = subField;
         field.description = field.hint || '';
         delete field.type;
         delete field.hint;
@@ -783,10 +779,7 @@ function addSubGroup(category, key) {
     const subName = 'new_group_' + Date.now();
     field.fields[subName] = {
         description: '',
-        is_dynamic: false,
         fields: {},
-        required: false,
-        immutable: false,
     };
 
     snapshotOpenCategories();
