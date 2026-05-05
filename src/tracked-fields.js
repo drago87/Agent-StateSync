@@ -4,7 +4,7 @@
 // Three categories: character, scenario, shared.
 // Each field can be simple (name + type + hint) or a group with sub-fields.
 // Sub-fields can themselves be groups (nested to arbitrary depth).
-// Five icon toggle buttons: Secret, Required, Immutable, Extend, Dynamic.
+// Character fields support a "secret" checkbox for privacy marking.
 //
 // Defaults loaded from external JSON files in the extension root:
 //   - default-tracked-character.json
@@ -18,15 +18,12 @@
 // panel) so that the field rows have enough horizontal space for
 // all the inputs, checkboxes, and buttons.
 //
-// File Version: 3.2.0
+// File Version: 3.1.0
 
 import state from './state.js';
 
 // Settings key for user customizations
 const TRACKED_FIELDS_KEY = 'agent_statesync_tracked_fields';
-
-// Settings key for user-saved defaults (per-category overrides)
-const USER_DEFAULTS_KEY = 'agent_statesync_user_defaults';
 
 // Module-level: current fields (defaults merged with user edits)
 let currentFields = null;
@@ -43,45 +40,32 @@ let openCategories = { character: false, scenario: false, shared: false };
 // #############################################
 
 /**
- * Cached base URL once resolved (so we don't probe on every call).
+ * Resolve the extension's base URL (where config.json and default JSON files live).
+ * Uses import.meta.url (standard ES module API) which is always correct
+ * regardless of how SillyTavern loads extensions.
  */
-let _resolvedBaseUrl = null;
-
-/**
- * Resolve the extension's base URL (where default JSON files live).
- * Scans script tags for our extension's script to find the directory,
- * then verifies the URL by probing for default-tracked-character.json.
- */
-async function getExtensionBaseUrl() {
-    if (_resolvedBaseUrl) return _resolvedBaseUrl;
-
-    // Script tag scan — the only strategy that reliably works with
-    // SillyTavern's extension loading (import.meta.url may point to
-    // dist/ subdir, and document.currentScript is null in ES modules).
+function getExtensionBaseUrl() {
+    // import.meta.url gives the full URL of this module file, e.g.
+    //   https://host/scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
+    // We strip the filename to get the directory.
     try {
-        const scripts = document.querySelectorAll('script[src]');
-        for (const script of scripts) {
-            const src = script.getAttribute('src') || '';
-            if (src.toLowerCase().includes('agent-statesync') || src.includes('index.js')) {
-                const dir = src.substring(0, src.lastIndexOf('/') + 1);
-                const probeUrl = `${dir}default-tracked-character.json?_=${Date.now()}`;
-                const r = await fetch(probeUrl, { method: 'HEAD' });
-                if (r.ok) {
-                    console.log(`[Agent-StateSync] Base URL resolved via script tag scan: ${dir}`);
-                    _resolvedBaseUrl = dir;
-                    return dir;
-                }
-            }
-        }
+        const moduleUrl = new URL(import.meta.url);
+        const path = moduleUrl.pathname; // e.g. /scripts/extensions/third-party/Agent-StateSync/tracked-fields.js
+        const dir = path.substring(0, path.lastIndexOf('/') + 1); // strip filename
+        return dir;
     } catch (e) {
-        console.warn('[Agent-StateSync] script tag scan strategy failed:', e.message);
+        console.warn('[Agent-StateSync] import.meta.url failed, falling back to script scan:', e.message);
     }
 
-    // Last resort — guess based on typical ST third-party extension path
-    const fallback = '/scripts/extensions/third-party/Agent-StateSync/';
-    console.warn(`[Agent-StateSync] Could not resolve base URL, using fallback: ${fallback}`);
-    _resolvedBaseUrl = fallback;
-    return fallback;
+    // Fallback: scan <script> tags
+    const scripts = document.querySelectorAll('script[src]');
+    for (const s of scripts) {
+        const src = s.getAttribute('src') || '';
+        const match = src.match(/^(.*\/Agent-StateSync\/)/i);
+        if (match) return match[1];
+    }
+    // Last resort
+    return '/scripts/extensions/third-party/Agent-StateSync/';
 }
 
 /**
@@ -101,10 +85,9 @@ async function loadDefaultFields() {
         // Cache is all-empty (previous fetch failure) — invalidate and retry
         console.log('[Agent-StateSync] Default fields cache was empty, retrying fetch...');
         defaultFieldsCache = null;
-        _resolvedBaseUrl = null; // also re-probe the base URL
     }
 
-    const base = await getExtensionBaseUrl();
+    const base = getExtensionBaseUrl();
     console.log(`[Agent-StateSync] Loading default fields from: ${base}`);
 
     const files = {
@@ -227,7 +210,7 @@ function renderCategory({ key, label, open, allowSecret }) {
 
     let fieldsHtml = '';
     for (const [fieldKey, fieldValue] of entries) {
-        fieldsHtml += renderField(key, fieldKey, fieldValue, 0, fieldKey, allowSecret);
+        fieldsHtml += renderField(key, fieldKey, fieldValue, 0, allowSecret);
     }
 
     const countBadge = fieldCount > 0
@@ -244,14 +227,8 @@ function renderCategory({ key, label, open, allowSecret }) {
             <button class="menu_button ass-tf-add-field" data-category="${key}">
                 <i class="fa-solid fa-plus"></i> Add field
             </button>
-            <button class="menu_button ass-tf-add-group-field" data-category="${key}">
-                <i class="fa-solid fa-folder-plus"></i> Add group field
-            </button>
-            <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults">
+            <button class="menu_button ass-tf-load-defaults" data-category="${key}" title="Reset this category to defaults from ${label} JSON file">
                 <i class="fa-solid fa-rotate-left"></i> Load Defaults
-            </button>
-            <button class="menu_button ass-tf-save-defaults" data-category="${key}" title="Save current fields as the default for this category">
-                <i class="fa-solid fa-floppy-disk"></i> Save as Default
             </button>
         </div>
     </details>`;
@@ -261,28 +238,38 @@ function renderCategory({ key, label, open, allowSecret }) {
  * Render a field — either simple or group (with nested sub-fields).
  * Supports arbitrary nesting depth.
  */
-function renderField(category, key, field, depth, path, allowSecret) {
+function renderField(category, key, field, depth, allowSecret) {
     if (isGroup(field)) {
-        return renderGroupField(category, key, field, depth, path, allowSecret);
+        return renderGroupField(category, key, field, depth, allowSecret);
     }
-    return renderSimpleField(category, key, field, depth, path, allowSecret);
+    return renderSimpleField(category, key, field, depth, allowSecret);
 }
 
-function renderSimpleField(category, key, field, depth, path, allowSecret) {
+function renderSimpleField(category, key, field, depth, allowSecret) {
     const type = field.type || 'string';
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
-    const isDynamic = field.is_dynamic || false;
     const secret = field.secret || false;
-    const required = field.required || false;
-    const immutable = field.immutable || false;
     const isNested = depth > 0;
 
+    const secretHtml = allowSecret
+        ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
+               <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
+               <i class="fa-solid fa-eye-slash"></i>
+           </label>`
+        : '';
+
+    const addSubBtn = !isNested
+        ? `<button class="menu_button ass-tf-add-sub-to-field"
+                  title="Add sub-field (converts to group)">
+               <i class="fa-solid fa-sitemap"></i>
+           </button>`
+        : '';
+
     const depthClass = isNested ? 'ass-tf-nested' : '';
-    const togglesHtml = buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret });
 
     return `
-    <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${escapeAttr(path)}">
+    <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
                    placeholder="Field name">
@@ -291,7 +278,11 @@ function renderSimpleField(category, key, field, depth, path, allowSecret) {
             <select class="text_pole ass-tf-type">
                 ${buildTypeOptions(type)}
             </select>
-            ${togglesHtml}
+            <label class="ass-tf-extends-label" title="Only extends this and will not overwrite">
+                <input type="checkbox" class="ass-tf-extends" ${extendsOnly ? 'checked' : ''}>
+            </label>
+            ${secretHtml}
+            ${addSubBtn}
             <button class="menu_button ass-tf-remove-field" title="Remove field">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -299,31 +290,59 @@ function renderSimpleField(category, key, field, depth, path, allowSecret) {
     </div>`;
 }
 
-function renderGroupField(category, key, field, depth, path, allowSecret) {
+/**
+ * Get the display label for an is_dynamic value.
+ */
+function getDynamicLabel(isDynamic) {
+    if (isDynamic === 'Per-Character') return 'Per-Char';
+    if (isDynamic === 'Situation-Based') return 'Situat.';
+    if (isDynamic === true || isDynamic === 'True') return 'Auto';
+    return 'Off';
+}
+
+/**
+ * Get the tooltip for an is_dynamic value.
+ */
+function getDynamicTooltip(isDynamic) {
+    if (isDynamic === 'Per-Character') return 'Dynamic: Per-Character — entries keyed by character name';
+    if (isDynamic === 'Situation-Based') return 'Dynamic: Situation-Based — entries keyed by situation description';
+    if (isDynamic === true || isDynamic === 'True') return 'Dynamic: Auto — mode inferred from context';
+    return 'Not dynamic — click to set dynamic mode';
+}
+
+function renderGroupField(category, key, field, depth, allowSecret) {
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
-    const extendsOnly = field.extends_only || false;
     const fields = field.fields || {};
     const secret = field.secret || false;
-    const required = field.required || false;
-    const immutable = field.immutable || false;
 
-    const togglesHtml = buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret });
+    const dynLabel = getDynamicLabel(isDynamic);
+    const dynTooltip = getDynamicTooltip(isDynamic);
+    const dynActiveClass = isDynamic ? 'ass-tf-dyn-active' : '';
+
+    const secretHtml = allowSecret
+        ? `<label class="ass-tf-secret-label" title="Mark as secret — hidden from other characters">
+               <input type="checkbox" class="ass-tf-secret" ${secret ? 'checked' : ''}>
+               <i class="fa-solid fa-eye-slash"></i>
+           </label>`
+        : '';
 
     let subfieldsHtml = '';
     for (const [subKey, subField] of Object.entries(fields)) {
-        const subPath = path + '.' + subKey;
-        subfieldsHtml += renderField(category, subKey, subField, depth + 1, subPath, allowSecret);
+        subfieldsHtml += renderField(category, subKey, subField, depth + 1, allowSecret);
     }
 
     return `
-    <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${escapeAttr(path)}">
+    <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
                    placeholder="Group name">
             <input class="text_pole ass-tf-desc" value="${escapeAttr(description)}"
                    placeholder="Description">
-            ${togglesHtml}
+            <button class="menu_button ass-tf-dynamic-btn ${dynActiveClass}" data-dyn-value="${isDynamic === true ? 'true' : isDynamic === false ? 'false' : isDynamic}" title="${dynTooltip}">
+                <i class="fa-solid fa-shuffle"></i> <small>${dynLabel}</small>
+            </button>
+            ${secretHtml}
             <button class="menu_button ass-tf-remove-field" title="Remove group">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -333,11 +352,11 @@ function renderGroupField(category, key, field, depth, path, allowSecret) {
         </div>
         <div class="ass-tf-group-actions">
             <button class="menu_button ass-tf-add-subfield"
-                    data-category="${category}" data-path="${escapeAttr(path)}">
+                    data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
                 <i class="fa-solid fa-plus"></i> Add sub-field
             </button>
             <button class="menu_button ass-tf-add-subgroup"
-                    data-category="${category}" data-path="${escapeAttr(path)}">
+                    data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
                 <i class="fa-solid fa-folder-plus"></i> Add sub-group
             </button>
         </div>
@@ -349,47 +368,86 @@ function isGroup(field) {
 }
 
 /**
- * Build icon-only toggle buttons for a field row.
- * Five toggles: Secret, Required, Immutable, Extend, Dynamic.
- * All are available on both simple and group fields at any depth.
- * Secret is only shown when allowSecret is true.
+ * Parse a dynamic value string from a data attribute into the proper JS value.
+ * - "false" → false
+ * - "true" → true
+ * - "Per-Character" → "Per-Character"
+ * - "Situation-Based" → "Situation-Based"
  */
-function buildIconToggles({ secret, extendsOnly, isDynamic, required, immutable, allowSecret }) {
-    let html = '';
+function parseDynamicValue(val) {
+    if (val === 'false') return false;
+    if (val === 'true') return true;
+    if (val === 'Per-Character' || val === 'Situation-Based') return val;
+    // Legacy: actual boolean/undefined from data model
+    return val || false;
+}
 
-    // Secret — hidden from other characters in group chat
-    if (allowSecret) {
-        html += `<button class="ass-tf-icon-toggle ass-tf-secret-toggle ${secret ? 'active' : ''}" 
-                title="Secret — only sent to the character it belongs to" type="button">
-            <i class="fa-solid fa-eye-slash"></i>
-        </button>`;
+/**
+ * Show a popup near the Dynamic button with 3 options.
+ * Clicking an option sets the is_dynamic value and re-renders.
+ */
+function showDynamicPopup($btn) {
+    // Remove any existing popup
+    $('.ass-tf-dyn-popup').remove();
+
+    // Read current value from the button's data attribute
+    const currentVal = $btn.attr('data-dyn-value') || 'false';
+
+    const options = [
+        { value: 'true', label: 'Auto (inferred)', desc: 'Mode inferred from context — e.g. "reactions" → Situation-Based, "relationships" → Per-Character', icon: 'fa-wand-magic-sparkles' },
+        { value: 'Per-Character', label: 'Per-Character', desc: 'Entries keyed by character name — e.g. relationships per character', icon: 'fa-users' },
+        { value: 'Situation-Based', label: 'Situation-Based', desc: 'Entries keyed by situation — e.g. reaction/feeling per situation', icon: 'fa-bolt' },
+    ];
+
+    let optionsHtml = options.map(opt => {
+        const isSelected = currentVal === opt.value ? 'ass-tf-dyn-selected' : '';
+        return `<div class="ass-tf-dyn-option ${isSelected}" data-dyn-value="${opt.value}">
+            <div class="ass-tf-dyn-option-header">
+                <i class="fa-solid ${opt.icon}"></i>
+                <b>${opt.label}</b>
+            </div>
+            <small>${opt.desc}</small>
+        </div>`;
+    }).join('');
+
+    // Also add an "Off" option if currently active
+    if (currentVal !== 'false') {
+        optionsHtml += `<div class="ass-tf-dyn-option" data-dyn-value="false">
+            <div class="ass-tf-dyn-option-header">
+                <i class="fa-solid fa-xmark"></i>
+                <b>Off</b>
+            </div>
+            <small>Not dynamic — fixed sub-fields only</small>
+        </div>`;
     }
 
-    // Required — field must be filled in
-    html += `<button class="ass-tf-icon-toggle ass-tf-required-toggle ${required ? 'active' : ''}" 
-            title="Required — this field must be filled in" type="button">
-        <i class="fa-solid fa-asterisk"></i>
-    </button>`;
+    const popupHtml = `<div class="ass-tf-dyn-popup" data-dyn-category="${$btn.closest('.ass-tf-field').attr('data-category')}" data-dyn-key="${$btn.closest('.ass-tf-field').attr('data-key')}">${optionsHtml}</div>`;
 
-    // Immutable — will only be written during initialization
-    html += `<button class="ass-tf-icon-toggle ass-tf-immutable-toggle ${immutable ? 'active' : ''}" 
-            title="Immutable — will only be written during initialization" type="button">
-        <i class="fa-solid fa-lock"></i>
-    </button>`;
+    // Position popup below the button
+    const btnOffset = $btn.offset();
+    const btnHeight = $btn.outerHeight();
 
-    // Extend — only adds to this field, never overwrites
-    html += `<button class="ass-tf-icon-toggle ass-tf-extend-toggle ${extendsOnly ? 'active' : ''}" 
-            title="Extend — only adds to this field, never overwrites" type="button">
-        <i class="fa-solid fa-code-merge"></i>
-    </button>`;
+    $('body').append(popupHtml);
+    const $popup = $('.ass-tf-dyn-popup');
 
-    // Dynamic — creates per-character entries (e.g. relationships)
-    html += `<button class="ass-tf-icon-toggle ass-tf-dynamic-toggle ${isDynamic ? 'active' : ''}" 
-            title="Dynamic — creates per-character entries (e.g. relationships)" type="button">
-        <i class="fa-solid fa-diagram-project"></i>
-    </button>`;
+    // Position it
+    let top = btnOffset.top + btnHeight + 4;
+    let left = btnOffset.left;
 
-    return html;
+    // Ensure popup doesn't go off-screen
+    const popupWidth = $popup.outerWidth();
+    const popupHeight = $popup.outerHeight();
+    const windowWidth = $(window).width();
+    const windowHeight = $(window).height();
+
+    if (left + popupWidth > windowWidth - 10) {
+        left = windowWidth - popupWidth - 10;
+    }
+    if (top + popupHeight > windowHeight - 10) {
+        top = btnOffset.top - popupHeight - 4;
+    }
+
+    $popup.css({ top, left });
 }
 
 // #############################################
@@ -410,10 +468,7 @@ function syncFieldsFromDOM() {
         const $topFields = $container.find(`.ass-tf-field[data-category="${cat}"][data-depth="0"]`);
         currentFields[cat] = {};
         $topFields.each(function () {
-            // Read the name from the input field (may have been edited),
-            // NOT from the stale data-key attribute.
-            const $name = $(this).find('> .ass-tf-row > .ass-tf-name');
-            const key = ($name.val() || '').trim() || String($(this).attr('data-key'));
+            const key = String($(this).attr('data-key'));
             const field = readFieldFromDOM($(this));
             if (key) currentFields[cat][key] = field;
         });
@@ -425,45 +480,39 @@ function syncFieldsFromDOM() {
  * Recursively reads nested sub-fields.
  */
 function readFieldFromDOM($el) {
-    const $row = $el.find('> .ass-tf-row');
-
-    // Read icon toggle states
-    const secret = $row.find('> .ass-tf-secret-toggle').hasClass('active');
-    const required = $row.find('> .ass-tf-required-toggle').hasClass('active');
-    const immutable = $row.find('> .ass-tf-immutable-toggle').hasClass('active');
-    const extendsOnly = $row.find('> .ass-tf-extend-toggle').hasClass('active');
-    const isDynamic = $row.find('> .ass-tf-dynamic-toggle').hasClass('active');
-
     if ($el.hasClass('ass-tf-group')) {
+        // Read is_dynamic from the button's data attribute
+        const $dynBtn = $el.find('> .ass-tf-row > .ass-tf-dynamic-btn');
+        const dynVal = $dynBtn.attr('data-dyn-value') || 'false';
+
         const result = {
-            description: ($row.find('> .ass-tf-desc').val() || '').trim(),
+            description: ($el.find('> .ass-tf-row > .ass-tf-desc').val() || '').trim(),
+            is_dynamic: parseDynamicValue(dynVal),
             fields: {},
         };
-        if (isDynamic) result.is_dynamic = true;
-        if (extendsOnly) result.extends_only = true;
-        if (secret) result.secret = true;
-        if (required) result.required = true;
-        if (immutable) result.immutable = true;
+
+        const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
+        if ($secret.length) {
+            result.secret = $secret.is(':checked');
+        }
 
         $el.children('.ass-tf-subfields').children('.ass-tf-field').each(function () {
-            // Read the name from the input field (may have been edited),
-            // NOT from the stale data-key attribute.
-            const $name = $(this).find('> .ass-tf-row > .ass-tf-name');
-            const subKey = ($name.val() || '').trim() || String($(this).attr('data-key'));
+            const subKey = String($(this).attr('data-key'));
             if (subKey) result.fields[subKey] = readFieldFromDOM($(this));
         });
 
         return result;
     } else {
         const result = {
-            type: $row.find('> .ass-tf-type').val() || 'string',
-            hint: ($row.find('> .ass-tf-hint').val() || '').trim(),
+            type: $el.find('> .ass-tf-row > .ass-tf-type').val() || 'string',
+            hint: ($el.find('> .ass-tf-row > .ass-tf-hint').val() || '').trim(),
+            extends_only: $el.find('> .ass-tf-row > .ass-tf-extends').is(':checked'),
         };
-        if (extendsOnly) result.extends_only = true;
-        if (isDynamic) result.is_dynamic = true;
-        if (secret) result.secret = true;
-        if (required) result.required = true;
-        if (immutable) result.immutable = true;
+
+        const $secret = $el.find('> .ass-tf-row > .ass-tf-secret-label > .ass-tf-secret');
+        if ($secret.length) {
+            result.secret = $secret.is(':checked');
+        }
 
         return result;
     }
@@ -523,52 +572,18 @@ function addField(category) {
     scheduleSave();
 }
 
-/**
- * Add a group field (empty group, no sub-fields) at the top level of a category.
- */
-function addGroupField(category) {
-    syncFieldsFromDOM();
-
-    const name = 'new_group_' + Date.now();
-    currentFields[category] = currentFields[category] || {};
-    currentFields[category][name] = {
-        description: '',
-        is_dynamic: false,
-        fields: {},
-    };
-    openCategories[category] = true;
-    snapshotOpenCategories();
-    renderAllCategories();
-    scheduleSave();
-}
-
 async function loadDefaults(category) {
     try {
-        // Confirmation popup — warn that current fields will be overwritten
-        const label = { character: 'Character', scenario: 'Scenario', shared: 'Shared' }[category] || category;
-        const confirmed = await showConfirmPopup(
-            `Load Defaults`,
-            `This will <b>replace</b> all current fields in the <b>${label}</b> category with the saved defaults.<br><br>Any edits you have made in this category will be lost. Continue?`
-        );
-        if (!confirmed) return;
-
         // Sync DOM → currentFields first to preserve any unsaved edits in OTHER categories
         syncFieldsFromDOM();
 
-        // Prefer user-saved defaults, fall back to JSON file defaults
-        let defaults = loadUserDefaultCategory(category);
-        let source = 'user defaults';
-        if (!defaults || Object.keys(defaults).length === 0) {
-            defaults = await loadDefaultCategory(category);
-            source = 'JSON file';
-        }
-
+        // Load and replace this category entirely
+        const defaults = await loadDefaultCategory(category);
         const count = Object.keys(defaults).length;
-        console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from ${source}`);
+        console.log(`[Agent-StateSync] loadDefaults("${category}"): got ${count} fields from JSON`);
 
         if (count === 0) {
-            const baseUrl = await getExtensionBaseUrl();
-            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing or URL may be wrong. Base URL: ${baseUrl}`);
+            console.warn(`[Agent-StateSync] loadDefaults("${category}"): defaults were empty — JSON file may be missing or URL may be wrong. Base URL: ${getExtensionBaseUrl()}`);
             toastr.warning(`Could not load defaults for ${category} — JSON file not found. Check the browser console (F12) for details.`, 'Agent-StateSync');
             return;
         }
@@ -578,138 +593,45 @@ async function loadDefaults(category) {
         snapshotOpenCategories();
         renderAllCategories();
         scheduleSave();
-        console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}" (from ${source})`);
+        console.log(`[Agent-StateSync] Loaded default tracked fields for "${category}"`);
     } catch (err) {
         console.error(`[Agent-StateSync] loadDefaults("${category}") error:`, err);
         toastr.error(`Error loading defaults: ${err.message}`, 'Agent-StateSync');
     }
 }
 
-/**
- * Save the current fields for a category as the user default.
- * Stored in extensionSettings under USER_DEFAULTS_KEY.
- * Load Defaults will prefer these over the JSON file defaults.
- */
-function saveAsDefault(category) {
+function removeField(category, key) {
     syncFieldsFromDOM();
-
-    const label = { character: 'Character', scenario: 'Scenario', shared: 'Shared' }[category] || category;
-    const fields = currentFields[category] || {};
-    const count = Object.keys(fields).length;
-
-    if (count === 0) {
-        toastr.warning(`Cannot save defaults for ${label} — category is empty.`, 'Agent-StateSync');
-        return;
-    }
-
-    // Persist to extensionSettings
-    if (!state.context.extensionSettings) state.context.extensionSettings = {};
-    const userDefaults = state.context.extensionSettings[USER_DEFAULTS_KEY] || {};
-    userDefaults[category] = JSON.parse(JSON.stringify(fields));
-    state.context.extensionSettings[USER_DEFAULTS_KEY] = userDefaults;
-    state.context.saveSettingsDebounced();
-
-    console.log(`[Agent-StateSync] Saved user defaults for "${category}" (${count} fields)`);
-    toastr.success(`Saved ${count} fields as default for ${label}.`, 'Agent-StateSync');
+    delete currentFields[category]?.[key];
+    snapshotOpenCategories();
+    renderAllCategories();
+    scheduleSave();
 }
 
 /**
- * Load user-saved defaults for a specific category.
- * Returns a deep-cloned copy, or null if no user defaults exist.
+ * Add a simple sub-field to a group.
+ * If the parent is a simple field, convert it to a group first.
  */
-function loadUserDefaultCategory(category) {
-    const userDefaults = state.context.extensionSettings?.[USER_DEFAULTS_KEY];
-    if (!userDefaults || !userDefaults[category]) return null;
-    return JSON.parse(JSON.stringify(userDefaults[category]));
-}
-
-/**
- * Show a confirmation popup with OK/Cancel.
- * Returns a Promise that resolves to true (OK) or false (Cancel).
- */
-function showConfirmPopup(title, messageHtml) {
-    return new Promise(resolve => {
-        const popupId = 'ass-tf-confirm-' + Date.now();
-        const html = `
-        <div id="${popupId}" class="ass-tf-confirm-overlay" style="
-            position:fixed; top:0; left:0; right:0; bottom:0;
-            background:rgba(0,0,0,0.5); z-index:10001;
-            display:flex; align-items:center; justify-content:center;
-            animation:ass-tf-fade-in 0.15s ease-out;">
-            <div style="
-                background:var(--SmartThemeBlurTintColor, rgba(25,25,35,0.97));
-                border:1px solid rgba(128,128,128,0.3);
-                border-radius:10px; padding:20px; max-width:420px; width:90vw;
-                box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-                <h4 style="margin:0 0 12px 0; font-size:14px; color:var(--fg);">
-                    <i class="fa-solid fa-triangle-exclamation" style="color:#f0ad4e;"></i> ${title}
-                </h4>
-                <div style="font-size:13px; color:var(--fg_dim); margin-bottom:16px; line-height:1.6;">
-                    ${messageHtml}
-                </div>
-                <div style="display:flex; gap:8px; justify-content:flex-end;">
-                    <button class="menu_button ass-tf-confirm-cancel" type="button">Cancel</button>
-                    <button class="menu_button ass-tf-confirm-ok" type="button" style="
-                        background:rgba(217,83,79,0.15); border-color:rgba(217,83,79,0.4); color:#d9534f;">
-                        OK
-                    </button>
-                </div>
-            </div>
-        </div>`;
-
-        $('body').append(html);
-        const $popup = $(`#${popupId}`);
-
-        $popup.find('.ass-tf-confirm-ok').on('click', () => {
-            $popup.remove();
-            resolve(true);
-        });
-        $popup.find('.ass-tf-confirm-cancel').on('click', () => {
-            $popup.remove();
-            resolve(false);
-        });
-        $popup.on('mousedown', function (e) {
-            if ($(e.target).is(`#${popupId}`)) {
-                $popup.remove();
-                resolve(false);
-            }
-        });
-    });
-}
-
-/**
- * Navigate to a nested field using a dot-separated path.
- * E.g. resolveField(currentFields['character'], 'Inventory.Weapons')
- * returns the 'Weapons' group inside the 'Inventory' group.
- * Returns null if the path can't be resolved.
- */
-function resolveField(parentObj, path) {
-    if (!path || !parentObj) return null;
-    const parts = path.split('.');
-    let current = parentObj;
-    for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        if (!current || typeof current !== 'object') return null;
-        // If current is a group (has .fields), navigate through it
-        if (current.fields !== undefined && typeof current.fields === 'object') {
-            current = current.fields[part];
-        } else {
-            current = current[part];
-        }
-    }
-    return current || null;
-}
-
-/**
- * Add a simple sub-field to a group identified by its path.
- */
-function addSubFieldToGroup(category, path) {
+function addSubFieldToGroup(category, key) {
     syncFieldsFromDOM();
-    const group = resolveField(currentFields[category], path);
-    if (!group || !isGroup(group)) return;
+    const field = findField(currentFields[category], key);
+    if (!field) return;
 
-    const subName = 'new_sub_' + Date.now();
-    group.fields[subName] = { type: 'string', hint: '', extends_only: false };
+    if (!isGroup(field)) {
+        field.fields = {};
+        field.fields['sub_1'] = {
+            type: field.type || 'string',
+            hint: field.hint || '',
+            extends_only: field.extends_only || false,
+        };
+        field.description = field.hint || '';
+        delete field.type;
+        delete field.hint;
+        delete field.extends_only;
+    } else {
+        const subName = 'new_sub_' + Date.now();
+        field.fields[subName] = { type: 'string', hint: '', extends_only: false };
+    }
 
     snapshotOpenCategories();
     renderAllCategories();
@@ -717,15 +639,28 @@ function addSubFieldToGroup(category, path) {
 }
 
 /**
- * Add a sub-group (nested group) to a group identified by its path.
+ * Add a sub-group (nested group) to an existing group.
  */
-function addSubGroup(category, path) {
+function addSubGroup(category, key) {
     syncFieldsFromDOM();
-    const group = resolveField(currentFields[category], path);
-    if (!group || !isGroup(group)) return;
+    const field = findField(currentFields[category], key);
+    if (!field) return;
+
+    if (!isGroup(field)) {
+        field.fields = {};
+        field.fields['sub_1'] = {
+            type: field.type || 'string',
+            hint: field.hint || '',
+            extends_only: field.extends_only || false,
+        };
+        field.description = field.hint || '';
+        delete field.type;
+        delete field.hint;
+        delete field.extends_only;
+    }
 
     const subName = 'new_group_' + Date.now();
-    group.fields[subName] = {
+    field.fields[subName] = {
         description: '',
         is_dynamic: false,
         fields: {},
@@ -736,49 +671,29 @@ function addSubGroup(category, path) {
     scheduleSave();
 }
 
-/**
- * Remove a field identified by its path.
- * For nested fields, navigates to the parent and deletes the key.
- * If a group is left with no fields and is not dynamic, converts back to simple.
- */
-function removeFieldByPath(category, path) {
+function removeSubField(category, parentKey, subKey) {
     syncFieldsFromDOM();
-    if (!path) return;
+    const parent = findField(currentFields[category], parentKey);
+    if (!parent?.fields) return;
 
-    const parts = path.split('.');
-    const key = parts.pop(); // the field to remove
-    const parentPath = parts.join('.');
+    delete parent.fields[subKey];
 
-    let parent;
-    if (parentPath === '') {
-        // Top-level field — parent is the category
-        parent = currentFields[category];
-    } else {
-        parent = resolveField(currentFields[category], parentPath);
-    }
-
-    if (!parent) return;
-
-    // If parent is a group, delete from its .fields
-    if (parent.fields !== undefined) {
-        delete parent.fields[key];
-
-        // If group is now empty and not dynamic, convert back to simple field
-        if (Object.keys(parent.fields).length === 0 && !parent.is_dynamic) {
-            parent.type = 'string';
-            parent.hint = parent.description || '';
-            delete parent.fields;
-            delete parent.description;
-            if (parent.is_dynamic !== undefined) delete parent.is_dynamic;
-        }
-    } else {
-        // Top-level field in the category
-        delete parent[key];
+    // If no sub-fields left, convert back to simple field
+    if (Object.keys(parent.fields).length === 0 && !parent.is_dynamic) {
+        parent.type = 'string';
+        parent.hint = parent.description || '';
+        delete parent.fields;
+        delete parent.description;
+        if (parent.is_dynamic !== undefined) delete parent.is_dynamic;
     }
 
     snapshotOpenCategories();
     renderAllCategories();
     scheduleSave();
+}
+
+function findField(parentObj, key) {
+    return parentObj?.[key];
 }
 
 // #############################################
@@ -815,15 +730,11 @@ function openTFModal() {
                     These are the global fields — per-character and per-persona additions
                     are configured in their respective brain panels.
                     <br><br>
-                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> <b>Secret</b> — only sent to the character it belongs to (Character category only).
-                    &nbsp;&nbsp;
-                    <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> <b>Required</b> — this field must be filled in.
-                    &nbsp;&nbsp;
-                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — will only be written during initialization.
-                    &nbsp;&nbsp;
-                    <i class="fa-solid fa-code-merge" style="color:#3498db;"></i> <b>Extend</b> — only adds to this field, never overwrites.
-                    &nbsp;&nbsp;
-                    <i class="fa-solid fa-diagram-project" style="color:#2ecc71;"></i> <b>Dynamic</b> — creates per-character entries (e.g. relationships).
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat (Character category only).
+                    <br>
+                    <i class="fa-solid fa-shuffle" style="color:#2ecc71;"></i> = Dynamic — click to choose mode: Auto / Per-Character / Situation-Based.
+                    <br>
+                    <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
                 </div>
             </div>
         </div>
@@ -856,6 +767,9 @@ function closeTFModal() {
     syncFieldsFromDOM();
     saveTrackedFields();
 
+    // Clean up popup and event handlers
+    $('.ass-tf-dyn-popup').remove();
+    $(document).off('.ass-tf-dyn');
     $('#ass-tf-overlay').remove();
     $(document).off('keydown.ass-tf-modal');
 
@@ -920,13 +834,17 @@ function bindModalEvents() {
         scheduleSave();
     });
 
-    // Icon toggle clicks — toggle active class, sync + save
-    $modal.on('click.ass-tf', '.ass-tf-icon-toggle', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        $(this).toggleClass('active');
+    // Checkbox changes — live sync + save
+    $modal.on('change.ass-tf', '.ass-tf-extends, .ass-tf-secret', function () {
         syncFieldsFromDOM();
         scheduleSave();
+    });
+
+    // Dynamic button — open popup selector
+    $modal.on('click.ass-tf', '.ass-tf-dynamic-btn', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        showDynamicPopup($(this));
     });
 
     // Add field
@@ -934,43 +852,75 @@ function bindModalEvents() {
         addField($(this).attr('data-category'));
     });
 
-    // Add group field
-    $modal.on('click.ass-tf', '.ass-tf-add-group-field', function () {
-        addGroupField($(this).attr('data-category'));
-    });
-
     // Load defaults
     $modal.on('click.ass-tf', '.ass-tf-load-defaults', async function () {
-        await loadDefaults($(this).attr('data-category'));
-    });
-
-    // Save as default
-    $modal.on('click.ass-tf', '.ass-tf-save-defaults', async function () {
         const category = $(this).attr('data-category');
-        const label = { character: 'Character', scenario: 'Scenario', shared: 'Shared' }[category] || category;
-        const confirmed = await showConfirmPopup(
-            `Save as Default`,
-            `This will <b>overwrite</b> the saved defaults for the <b>${label}</b> category with your current fields.<br><br>Future "Load Defaults" will use these instead of the extension's built-in defaults. Continue?`
-        );
-        if (confirmed) saveAsDefault(category);
+        await loadDefaults(category);
     });
 
-    // Remove field (any depth)
+    // Remove field
     $modal.on('click.ass-tf', '.ass-tf-remove-field', function () {
         const $field = $(this).closest('.ass-tf-field');
         const category = $field.attr('data-category');
-        const path = $field.attr('data-path') || $field.attr('data-key');
-        removeFieldByPath(category, path);
+        const depth = parseInt($field.attr('data-depth') || '0', 10);
+
+        if (depth === 0) {
+            removeField(category, $field.attr('data-key'));
+        } else {
+            const $parent = $field.parent().closest('.ass-tf-field');
+            const parentKey = $parent.attr('data-key');
+            removeSubField(category, parentKey, $field.attr('data-key'));
+        }
     });
 
     // Add sub-field to group
     $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
-        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-path'));
+        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
+    });
+
+    // Dynamic popup: option selection (bound on document since popup is outside modal)
+    $(document).on('click.ass-tf-dyn', '.ass-tf-dyn-option', function () {
+        const rawValue = $(this).attr('data-dyn-value');
+        const value = parseDynamicValue(rawValue);
+
+        // The popup stores a reference to the group's category and key
+        const category = $(this).closest('.ass-tf-dyn-popup').attr('data-dyn-category');
+        const key = $(this).closest('.ass-tf-dyn-popup').attr('data-dyn-key');
+
+        // Sync DOM → currentFields first to preserve other edits
+        syncFieldsFromDOM();
+
+        const field = findField(currentFields[category], key);
+        if (field) {
+            field.is_dynamic = value;
+        }
+
+        // Re-render
+        snapshotOpenCategories();
+        renderAllCategories();
+        scheduleSave();
+
+        // Remove popup
+        $('.ass-tf-dyn-popup').remove();
+    });
+
+    // Dynamic popup: close when clicking outside
+    $(document).on('mousedown.ass-tf-dyn', function (e) {
+        const $popup = $('.ass-tf-dyn-popup');
+        if ($popup.length && !$(e.target).closest('.ass-tf-dyn-popup, .ass-tf-dynamic-btn').length) {
+            $popup.remove();
+        }
+    });
+
+    // Add sub-field via sitemap button (converts to group)
+    $modal.on('click.ass-tf', '.ass-tf-add-sub-to-field', function () {
+        const $field = $(this).closest('.ass-tf-field');
+        addSubFieldToGroup($field.attr('data-category'), $field.attr('data-key'));
     });
 
     // Add sub-group
     $modal.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
-        addSubGroup($(this).attr('data-category'), $(this).attr('data-path'));
+        addSubGroup($(this).attr('data-category'), $(this).attr('data-key'));
     });
 }
 
@@ -1027,7 +977,7 @@ function injectCSS() {
         background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
         border: 1px solid rgba(128, 128, 128, 0.3);
         border-radius: 10px;
-        width: 1000px;
+        width: 820px;
         max-width: 95vw;
         max-height: 85vh;
         overflow-y: auto;
@@ -1164,39 +1114,105 @@ function injectCSS() {
         gap: 6px;
     }
 
-    /* Icon toggle buttons */
-    .ass-tf-icon-toggle {
-        background: none;
-        border: none;
-        padding: 2px 4px;
+    /* Checkbox labels */
+    .ass-tf-extends-label,
+    .ass-tf-secret-label {
+        display: flex;
+        align-items: center;
+        gap: 3px;
         cursor: pointer;
-        color: var(--fg_dim);
-        opacity: 0.35;
-        font-size: 13px;
-        transition: opacity 0.2s, color 0.2s;
         flex-shrink: 0;
-        line-height: 1;
+        font-size: 12px;
+        white-space: nowrap;
+        color: var(--fg_dim);
     }
-    .ass-tf-icon-toggle:hover {
-        opacity: 0.7;
-    }
-    .ass-tf-icon-toggle.active {
-        opacity: 1;
-    }
-    .ass-tf-secret-toggle.active {
+    .ass-tf-secret-label {
         color: #9b59b6;
     }
-    .ass-tf-required-toggle.active {
-        color: #e67e22;
+    .ass-tf-secret-label input,
+    .ass-tf-extends-label input {
+        margin: 0;
+        width: 14px;
+        height: 14px;
     }
-    .ass-tf-immutable-toggle.active {
-        color: #e74c3c;
+
+    /* Dynamic mode button */
+    .ass-tf-dynamic-btn {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px !important;
+        font-size: 11px;
+        opacity: 0.6;
+        border: 1px solid rgba(46, 204, 113, 0.2) !important;
+        transition: opacity 0.2s, border-color 0.2s;
     }
-    .ass-tf-extend-toggle.active {
-        color: #3498db;
+    .ass-tf-dynamic-btn:hover {
+        opacity: 1;
+        border-color: rgba(46, 204, 113, 0.5) !important;
     }
-    .ass-tf-dynamic-toggle.active {
+    .ass-tf-dynamic-btn.ass-tf-dyn-active {
+        opacity: 1;
+        border-color: rgba(46, 204, 113, 0.6) !important;
+        background: rgba(46, 204, 113, 0.12) !important;
+    }
+    .ass-tf-dynamic-btn.ass-tf-dyn-active i {
         color: #2ecc71;
+    }
+
+    /* Dynamic popup */
+    .ass-tf-dyn-popup {
+        position: fixed;
+        z-index: 10001;
+        background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.98));
+        border: 1px solid rgba(46, 204, 113, 0.3);
+        border-radius: 8px;
+        padding: 8px;
+        min-width: 260px;
+        max-width: 320px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        animation: ass-tf-dyn-pop-in 0.12s ease-out;
+    }
+    @keyframes ass-tf-dyn-pop-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .ass-tf-dyn-option {
+        padding: 8px 10px;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background 0.15s;
+        margin-bottom: 4px;
+    }
+    .ass-tf-dyn-option:last-child { margin-bottom: 0; }
+    .ass-tf-dyn-option:hover {
+        background: rgba(46, 204, 113, 0.1);
+    }
+    .ass-tf-dyn-option.ass-tf-dyn-selected {
+        background: rgba(46, 204, 113, 0.15);
+        border-left: 3px solid #2ecc71;
+    }
+    .ass-tf-dyn-option-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 2px;
+        color: var(--fg);
+    }
+    .ass-tf-dyn-option-header i {
+        color: #2ecc71;
+        width: 14px;
+        text-align: center;
+    }
+    .ass-tf-dyn-option.ass-tf-dyn-selected .ass-tf-dyn-option-header i {
+        color: #27ae60;
+    }
+    .ass-tf-dyn-option small {
+        color: var(--fg_dim);
+        line-height: 1.4;
+        display: block;
+        padding-left: 20px;
     }
 
     /* Load defaults button */
@@ -1205,19 +1221,6 @@ function injectCSS() {
     }
     .ass-tf-load-defaults:hover {
         opacity: 1;
-    }
-
-    /* Save as default button */
-    .ass-tf-save-defaults {
-        opacity: 0.7;
-    }
-    .ass-tf-save-defaults:hover {
-        opacity: 1;
-    }
-
-    /* Category actions — allow wrapping */
-    .ass-tf-category-actions {
-        flex-wrap: wrap;
     }
     </style>`;
 

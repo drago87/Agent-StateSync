@@ -4,22 +4,103 @@
 // POST /api/sessions/{id}/init.  Handles single-character,
 // multi-character, scenario, and group chat formats.
 //
+// tracked_field_additions payload format (v3):
+//   { character: { "FieldName": { type, hint, ... } }, scenario: { ... }, shared: { ... } }
+//   Empty categories are excluded.
+//
 // Extracted from session.js to keep the payload builder
 // separate from the session lifecycle management.
-// File Version: 1.0.0
+// File Version: 1.2.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, CHAR_CONFIG_EXT_KEY,
     buildPromptSettingsPayload,
 } from './settings.js';
-import { getCharInitType, getCharInitNames } from './char-config.js';
+import { getCharInitType, getCharInitNames, getTrackedFieldAdditionsForChar } from './char-config.js';
 import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions, getPersonaType } from './persona-config.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
 
 // #############################################
 // # Payload Helper Functions
 // #############################################
+
+/**
+ * Normalize is_dynamic values for the payload.
+ * Internal format: false, true, "Per-Character", "Situation-Based"
+ * Payload format: omit if false, "True" if true, "Per-Character", "Situation-Based"
+ */
+function normalizeIsDynamic(val) {
+    if (val === true) return 'True';
+    if (val === 'Per-Character' || val === 'Situation-Based') return val;
+    // false, undefined, null, etc. — not dynamic
+    return undefined;
+}
+
+/**
+ * Walk a tracked fields object (dict format from global settings)
+ * and normalize all is_dynamic values for the payload.
+ * Mutates the object in place.
+ */
+function normalizeTrackedFields(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    for (const key of Object.keys(obj)) {
+        const field = obj[key];
+        if (!field || typeof field !== 'object') continue;
+
+        if (field.fields !== undefined) {
+            // It's a group
+            const normalized = normalizeIsDynamic(field.is_dynamic);
+            if (normalized === undefined) {
+                delete field.is_dynamic;
+            } else {
+                field.is_dynamic = normalized;
+            }
+            // Recurse into sub-fields
+            normalizeTrackedFields(field.fields);
+        }
+    }
+}
+
+/**
+ * Walk a tracked_field_additions payload object (categorized dict format)
+ * and normalize all is_dynamic values.
+ * The payload format is: { character: { fieldName: { ... } }, scenario: { ... }, shared: { ... } }
+ * Mutates the object in place.
+ */
+function normalizeTFAdditions(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    for (const catKey of Object.keys(obj)) {
+        const category = obj[catKey];
+        if (!category || typeof category !== 'object') continue;
+        // Walk each field in the category
+        normalizeTFAdditionsFields(category);
+    }
+}
+
+/**
+ * Walk a single category's fields (dict format: { fieldName: { ... } })
+ * and normalize is_dynamic values recursively.
+ */
+function normalizeTFAdditionsFields(fields) {
+    if (!fields || typeof fields !== 'object') return;
+    for (const key of Object.keys(fields)) {
+        const field = fields[key];
+        if (!field || typeof field !== 'object') continue;
+
+        if (field.fields !== undefined) {
+            // It's a group
+            const normalized = normalizeIsDynamic(field.is_dynamic);
+            if (normalized === undefined) {
+                delete field.is_dynamic;
+            } else {
+                field.is_dynamic = normalized;
+            }
+            // Recurse into sub-fields
+            normalizeTFAdditionsFields(field.fields);
+        }
+    }
+}
 
 /**
  * Build the character/scenario data object from a character's card fields.
@@ -66,10 +147,22 @@ function buildPersona() {
     // Persona type (character, narrator, system, observer)
     persona.type = getPersonaType();
 
-    // Per-persona tracked field additions
+    // Per-persona tracked field additions (categorized dict format)
     const personaTFAdditions = getPersonaTrackedFieldAdditions();
     if (personaTFAdditions) {
-        persona.tracked_field_additions = personaTFAdditions;
+        persona.tracked_field_additions = JSON.parse(JSON.stringify(personaTFAdditions));
+        normalizeTFAdditions(persona.tracked_field_additions);
+        // Remove categories that became empty after normalization
+        for (const cat of ['character', 'scenario', 'shared']) {
+            const catData = persona.tracked_field_additions[cat];
+            if (catData && typeof catData === 'object' && Object.keys(catData).length === 0) {
+                delete persona.tracked_field_additions[cat];
+            }
+        }
+        // Remove tracked_field_additions entirely if no categories remain
+        if (Object.keys(persona.tracked_field_additions).length === 0) {
+            delete persona.tracked_field_additions;
+        }
     }
 
     // Per-persona prompt settings override
@@ -182,8 +275,22 @@ function buildGroupMemberPayload(charObj, firstMes) {
     // --- Per-character tracked_field_additions and prompt_settings_override ---
     const extData = charObj?.data?.extensions?.[CHAR_CONFIG_EXT_KEY];
     if (extData) {
-        if (Array.isArray(extData.tracked_field_additions) && extData.tracked_field_additions.length > 0) {
-            member.tracked_field_additions = extData.tracked_field_additions;
+        // tracked_field_additions: getTrackedFieldAdditionsForChar returns
+        // categorized dict format with empty categories excluded.
+        const tfAdditionsPayload = getTrackedFieldAdditionsForChar(charObj);
+        if (tfAdditionsPayload) {
+            member.tracked_field_additions = JSON.parse(JSON.stringify(tfAdditionsPayload));
+            normalizeTFAdditions(member.tracked_field_additions);
+            // Remove empty categories
+            for (const cat of ['character', 'scenario', 'shared']) {
+                const catData = member.tracked_field_additions[cat];
+                if (catData && typeof catData === 'object' && Object.keys(catData).length === 0) {
+                    delete member.tracked_field_additions[cat];
+                }
+            }
+            if (Object.keys(member.tracked_field_additions).length === 0) {
+                delete member.tracked_field_additions;
+            }
         }
         if (extData.prompt_settings_override && typeof extData.prompt_settings_override === 'object') {
             const overrides = { ...extData.prompt_settings_override };
@@ -308,6 +415,9 @@ function buildSingleCharInitPayload() {
         );
         if (hasContent) {
             payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
+            normalizeTrackedFields(payload.tracked_fields.character);
+            normalizeTrackedFields(payload.tracked_fields.scenario);
+            normalizeTrackedFields(payload.tracked_fields.shared);
         }
     }
 
@@ -416,6 +526,9 @@ function buildGroupInitPayload() {
         );
         if (hasContent) {
             payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
+            normalizeTrackedFields(payload.tracked_fields.character);
+            normalizeTrackedFields(payload.tracked_fields.scenario);
+            normalizeTrackedFields(payload.tracked_fields.shared);
         }
     }
 

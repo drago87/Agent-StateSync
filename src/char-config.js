@@ -10,13 +10,19 @@
 //   - Prompt Configs Override (per-character prompt settings)
 //   - Database Tracked Fields Additions (via brain-tf-additions.js)
 //
-// tracked_field_additions uses ARRAY storage format (v2):
-//   [{ name: "FieldName", type, hint, extends_only, secret }, ...]
-//   Arrays replace entirely on merge — no ghost fields after F5.
+// tracked_field_additions uses CATEGORIZED ARRAY storage format (v3):
+//   { character: [{ name, type, hint, ... }], scenario: [...], shared: [...] }
+//   Each category's array replaces entirely on merge — no ghost fields after F5.
 //
-// Supports nested sub-fields and secret marking.
+// Payload format (for init):
+//   tracked_field_additions: {
+//     character: { "FieldName": { type, hint, ... } },
+//     scenario: { ... },
+//     shared: { ... }
+//   }
+//   Empty categories are excluded.
 //
-// File Version: 2.0.0
+// File Version: 3.0.0
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -27,6 +33,7 @@ import {
 import {
     renderTFAdditions, readTFAdditionsFromUI,
     renderTFContainer, bindTFAdditionEvents,
+    normalizeAdditions, injectBtfCSS,
 } from './brain-tf-additions.js';
 
 // #############################################
@@ -37,7 +44,7 @@ const DEFAULT_CHAR_CONFIG = {
     mode: 'characters',   // 'characters' | 'scenario'
     names: [''],          // array of character name strings
     prompt_settings_override: {},  // per-character prompt overrides
-    tracked_field_additions: [],  // ARRAY of field entries (v2 format)
+    tracked_field_additions: { character: [], scenario: [], shared: [] },  // CATEGORIZED arrays (v3)
 };
 
 // #############################################
@@ -83,11 +90,11 @@ function findCharIdByAvatar() {
 }
 
 // #############################################
-// # Array <-> Object Migration
+// # Array <-> Object Conversion
 // #############################################
 
 /**
- * Migrate old object-format tracked_field_additions to new array format.
+ * Migrate old object-format tracked_field_additions to array format.
  * Old: { "FieldName": { type, hint, extends_only } }
  * New: [{ name: "FieldName", type, hint, extends_only, secret }]
  * Also migrates group sub-fields from object to array, with nesting.
@@ -96,35 +103,27 @@ function migrateTFAdditionsToArray(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj || [];
     return Object.entries(obj).map(([name, field]) => {
         if (field && field.fields !== undefined) {
-            const group = {
+            return {
                 name: name,
                 description: field.description || '',
                 is_dynamic: field.is_dynamic || false,
                 secret: field.secret || false,
                 fields: migrateTFAdditionsToArray(field.fields),
             };
-            if (field.extends_only) group.extends_only = true;
-            if (field.required) group.required = true;
-            if (field.immutable) group.immutable = true;
-            return group;
         }
-        const simple = {
+        return {
             name: name,
             type: field.type || 'string',
             hint: field.hint || '',
             extends_only: field.extends_only || false,
             secret: field.secret || false,
         };
-        if (field.is_dynamic) simple.is_dynamic = true;
-        if (field.required) simple.required = true;
-        if (field.immutable) simple.immutable = true;
-        return simple;
     });
 }
 
 /**
- * Convert array-format tracked_field_additions to object format
- * for the Agent init payload. Supports arbitrary nesting and secret field.
+ * Convert a single array of addition entries to object format
+ * for the Agent init payload.
  * Array: [{ name: "X", ... }, ...]
  * Object: { "X": { ... } }
  */
@@ -145,23 +144,42 @@ function tfAdditionsArrayToObject(additions) {
                 is_dynamic: entry.is_dynamic || false,
                 fields: subFields || {},
             };
-            if (entry.extends_only) obj[name].extends_only = true;
             if (entry.secret) obj[name].secret = true;
-            if (entry.required) obj[name].required = true;
-            if (entry.immutable) obj[name].immutable = true;
         } else {
             obj[name] = {
                 type: entry.type || 'string',
                 hint: entry.hint || '',
                 extends_only: entry.extends_only || false,
             };
-            if (entry.is_dynamic) obj[name].is_dynamic = true;
             if (entry.secret) obj[name].secret = true;
-            if (entry.required) obj[name].required = true;
-            if (entry.immutable) obj[name].immutable = true;
         }
     }
     return Object.keys(obj).length > 0 ? obj : null;
+}
+
+/**
+ * Convert categorized array format to categorized dict format
+ * for the Agent init payload.
+ * Input:  { character: [...], scenario: [...], shared: [...] }
+ * Output: { character: {...}, scenario: {...}, shared: {...} }
+ * Empty categories are excluded from the output.
+ * Returns null if all categories are empty.
+ */
+export function tfAdditionsCategorizedToPayload(additions) {
+    if (!additions || typeof additions !== 'object') return null;
+
+    const normalized = normalizeAdditions(additions);
+    const result = {};
+    const categories = ['character', 'scenario', 'shared'];
+
+    for (const cat of categories) {
+        const arr = normalized[cat];
+        if (!Array.isArray(arr) || arr.length === 0) continue;
+        const dict = tfAdditionsArrayToObject(arr);
+        if (dict) result[cat] = dict;
+    }
+
+    return Object.keys(result).length > 0 ? result : null;
 }
 
 // #############################################
@@ -171,7 +189,7 @@ function tfAdditionsArrayToObject(additions) {
 /**
  * Read the stored character config from the active character's card data.
  * Returns a validated copy of the stored config, or the defaults.
- * Migrates old object-format tracked_field_additions to array on read.
+ * Migrates old format tracked_field_additions to categorized arrays on read.
  */
 function readCharConfig() {
     const charId = panelCharId ?? state.context.characterId;
@@ -180,24 +198,23 @@ function readCharConfig() {
     if (char?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]) {
         const stored = char.data.extensions[CHAR_CONFIG_EXT_KEY];
 
-        // Migrate tracked_field_additions from object to array format (one-time)
+        // Normalize tracked_field_additions to categorized format (v3)
         let tfAdditions = stored.tracked_field_additions;
-        if (tfAdditions && !Array.isArray(tfAdditions) && typeof tfAdditions === 'object') {
-            tfAdditions = migrateTFAdditionsToArray(tfAdditions);
-            char.data.extensions[CHAR_CONFIG_EXT_KEY].tracked_field_additions = tfAdditions;
-        }
+        tfAdditions = normalizeAdditions(tfAdditions);
+
+        // Persist the migration back to the card data
+        char.data.extensions[CHAR_CONFIG_EXT_KEY].tracked_field_additions = tfAdditions;
 
         return {
             mode: (stored.mode === 'scenario') ? 'scenario' : 'characters',
             names: Array.isArray(stored.names) && stored.names.length > 0 ? [...stored.names] : [''],
             prompt_settings_override: stored.prompt_settings_override || stored.prompt_settings || {},
-            tracked_field_additions: Array.isArray(tfAdditions)
-                ? [...tfAdditions.map(e => JSON.parse(JSON.stringify(e)))]
-                : [],
+            tracked_field_additions: JSON.parse(JSON.stringify(tfAdditions)),
         };
     }
 
-    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings_override: {}, tracked_field_additions: [] };
+    return { ...DEFAULT_CHAR_CONFIG, names: [''], prompt_settings_override: {},
+        tracked_field_additions: { character: [], scenario: [], shared: [] } };
 }
 
 /**
@@ -213,13 +230,14 @@ function writeCharConfig(config) {
         return;
     }
 
+    // Normalize additions before saving
+    const normalizedAdditions = normalizeAdditions(config.tracked_field_additions);
+
     const configData = {
         mode: config.mode || 'characters',
         names: config.names || [''],
         prompt_settings_override: config.prompt_settings_override || {},
-        tracked_field_additions: Array.isArray(config.tracked_field_additions)
-            ? config.tracked_field_additions
-            : [],
+        tracked_field_additions: normalizedAdditions,
     };
 
     if (!char.data) char.data = {};
@@ -305,30 +323,28 @@ export function getPromptOverridesForChar(charObj) {
 }
 
 /**
- * Get the per-character tracked field additions.
- * Converts array storage to object format for the payload.
- * Returns null if no additions exist.
+ * Get the per-character tracked field additions in payload format.
+ * Converts categorized arrays to categorized dicts.
+ * Returns null if no additions exist in any category.
  */
 export function getCharTrackedFieldAdditions() {
     const config = readCharConfig();
-    return tfAdditionsArrayToObject(config.tracked_field_additions);
+    return tfAdditionsCategorizedToPayload(config.tracked_field_additions);
 }
 
 /**
  * Get tracked field additions for a specific character object.
  * Works in group mode where getActiveCharData() returns null.
- * Converts array storage to object format for the payload.
+ * Converts from stored format (any version) to categorized dict payload format.
  */
 export function getTrackedFieldAdditionsForChar(charObj) {
     if (!charObj?.data?.extensions) return null;
     const extData = charObj.data.extensions[CHAR_CONFIG_EXT_KEY];
     if (!extData?.tracked_field_additions) return null;
 
-    let additions = extData.tracked_field_additions;
-    if (!Array.isArray(additions) && typeof additions === 'object') {
-        additions = migrateTFAdditionsToArray(additions);
-    }
-    return tfAdditionsArrayToObject(additions);
+    // normalizeAdditions handles all legacy formats
+    const normalized = normalizeAdditions(extData.tracked_field_additions);
+    return tfAdditionsCategorizedToPayload(normalized);
 }
 
 // #############################################
@@ -375,8 +391,8 @@ function injectBrainCSS() {
             background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
             border: 1px solid rgba(128, 128, 128, 0.3);
             border-radius: 10px;
-            width: 780px;
-            max-width: 92vw;
+            width: 480px;
+            max-width: 90vw;
             max-height: 85vh;
             overflow-y: auto;
             padding: 20px;
@@ -498,69 +514,6 @@ function injectBrainCSS() {
         #ass-brain-add-name {
             margin-top: 4px;
             font-size: 12px;
-        }
-
-        /* Tracked field additions */
-        .ass-btf-field {
-            background: rgba(128, 128, 128, 0.06);
-            border: 1px solid rgba(128, 128, 128, 0.15);
-            border-radius: 4px;
-            padding: 6px 8px;
-            margin-bottom: 6px;
-        }
-        .ass-btf-field.ass-btf-group {
-            background: rgba(92, 184, 92, 0.04);
-            border-color: rgba(92, 184, 92, 0.18);
-        }
-        .ass-btf-field.ass-btf-nested {
-            background: rgba(128, 128, 128, 0.04);
-            border-color: rgba(128, 128, 128, 0.12);
-        }
-        .ass-btf-row {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin-bottom: 4px;
-        }
-        .ass-btf-row:last-child { margin-bottom: 0; }
-        .ass-btf-subfields {
-            margin: 6px 0 4px 16px;
-            padding-left: 10px;
-            border-left: 2px solid rgba(128, 128, 128, 0.2);
-        }
-        /* Icon toggle buttons */
-        .ass-btf-icon-toggle {
-            background: none;
-            border: none;
-            padding: 2px 4px;
-            cursor: pointer;
-            color: var(--fg_dim);
-            opacity: 0.35;
-            font-size: 13px;
-            transition: opacity 0.2s, color 0.2s;
-            flex-shrink: 0;
-            line-height: 1;
-        }
-        .ass-btf-icon-toggle:hover {
-            opacity: 0.7;
-        }
-        .ass-btf-icon-toggle.active {
-            opacity: 1;
-        }
-        .ass-btf-secret-toggle.active {
-            color: #9b59b6;
-        }
-        .ass-btf-required-toggle.active {
-            color: #e67e22;
-        }
-        .ass-btf-immutable-toggle.active {
-            color: #e74c3c;
-        }
-        .ass-btf-extend-toggle.active {
-            color: #3498db;
-        }
-        .ass-btf-dynamic-toggle.active {
-            color: #2ecc71;
         }
 
         .ass-brain-info {
@@ -691,26 +644,10 @@ function openCharConfigPanel() {
                         <i class="fa-solid fa-database"></i> Database Tracked Fields Additions
                     </summary>
                     ${renderTFAdditions(config.tracked_field_additions, { allowSecret: true })}
-                    <div style="margin-top:6px; display:flex; gap:6px;">
-                        <button id="ass-brain-add-tf" class="menu_button" type="button">
-                            <i class="fa-solid fa-plus"></i> Add Field
-                        </button>
-                        <button id="ass-brain-add-tf-group" class="menu_button" type="button">
-                            <i class="fa-solid fa-folder-plus"></i> Add Group Field
-                        </button>
-                    </div>
                     <div class="ass-brain-info">
                         Add character-specific fields to track in the state database.<br>
                         These are merged with the global tracked fields when sending to the Agent.<br>
-                        <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> <b>Secret</b> — only sent to the character it belongs to.
-                        &nbsp;&nbsp;
-                        <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> <b>Required</b> — this field must be filled in.
-                        &nbsp;&nbsp;
-                        <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> <b>Immutable</b> — will only be written during initialization.
-                        &nbsp;&nbsp;
-                        <i class="fa-solid fa-code-merge" style="color:#3498db;"></i> <b>Extend</b> — only adds to this field, never overwrites.
-                        &nbsp;&nbsp;
-                        <i class="fa-solid fa-diagram-project" style="color:#2ecc71;"></i> <b>Dynamic</b> — creates per-character entries (e.g. relationships).
+                        <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat.
                     </div>
                 </details>
             </div>
@@ -719,6 +656,9 @@ function openCharConfigPanel() {
     </div>`;
 
     $('body').append(html);
+
+    // Inject BTF CSS for category styles
+    injectBtfCSS();
 
     renderNameInputs(config.names);
 
@@ -819,6 +759,7 @@ function renderNameInputs(names) {
 
 export function initCharConfig() {
     injectBrainCSS();
+    injectBtfCSS();
     injectBrainButton();
     console.log(`[${EXTENSION_NAME}] Character config module loaded.`);
 }
