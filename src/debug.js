@@ -2,7 +2,7 @@
 //
 // Executes diagnostic commands and returns formatted output strings
 // for display in the debug panel textbox.
-// File Version: 1.0.2
+// File Version: 1.1.0
 
 import state from './state.js';
 import {
@@ -27,6 +27,69 @@ export async function executeDebugCommand(command) {
 
     try {
         switch (command) {
+
+            case 'chat_mode': {
+                add('=== Chat Mode Detection ===');
+                add('');
+
+                // Primary signal from SillyTavern
+                const groupId = state.context.groupId ?? null;
+                const characterId = state.context.characterId ?? null;
+                const name2 = state.context.name2 || '(empty)';
+                const chatId = typeof state.context.getCurrentChatId === 'function'
+                    ? state.context.getCurrentChatId() : null;
+
+                add('--- SillyTavern Context Signals ---');
+                add(`context.groupId:     ${groupId ?? 'null (NOT a group)'}`);
+                add(`context.characterId: ${characterId ?? 'null'}`);
+                add(`context.name2:       "${name2}"`);
+                add(`getCurrentChatId():  ${chatId ?? 'null'}`);
+                add('');
+
+                add('--- Extension State ---');
+                add(`state.isGroupChat:           ${state.isGroupChat}`);
+                add(`state.activeGroup:           ${state.activeGroup ? `"${state.activeGroup.name}" (id=${state.activeGroup.id})` : 'null'}`);
+                add(`state.activeGroupCharacters: ${state.activeGroupCharacters.length} member(s)`);
+                add(`state.cachedGroups:          ${state.cachedGroups ? `${state.cachedGroups.length} group(s) loaded` : 'null (not loaded)'}`);
+                add('');
+
+                add('--- Diagnosis ---');
+                if (groupId) {
+                    add(`MODE: GROUP CHAT (context.groupId = "${groupId}")`);
+                    if (state.cachedGroups) {
+                        const g = state.cachedGroups.find(x => x.id === groupId);
+                        if (g) {
+                            add(`  Matched group: "${g.name}"`);
+                            add(`  Members: ${(g.members || []).join(', ')}`);
+                        } else {
+                            add(`  WARNING: groupId "${groupId}" NOT FOUND in cached groups!`);
+                        }
+                    } else {
+                        add(`  Groups not loaded yet — run "Load & Dump Groups" to verify`);
+                    }
+                    if (!state.isGroupChat) {
+                        add(`  BUG: context.groupId is set but state.isGroupChat is false!`);
+                    }
+                } else {
+                    add('MODE: SINGLE CHARACTER (context.groupId is null)');
+                    if (characterId !== null && characterId !== undefined) {
+                        const char = state.context.characters?.[characterId];
+                        if (char) {
+                            add(`  Character: "${char.name}" (index=${characterId})`);
+                            add(`  Avatar: "${char.avatar || ''}"`);
+                        } else {
+                            add(`  Character index=${characterId} but no character found at that index`);
+                        }
+                    } else {
+                        add(`  No character selected (characterId is null)`);
+                    }
+                    if (state.isGroupChat) {
+                        add(`  BUG: context.groupId is null but state.isGroupChat is true!`);
+                        add(`  This is a false group detection bug.`);
+                    }
+                }
+                break;
+            }
 
             case 'context_dump': {
                 add('=== SillyTavern Context Dump ===');
@@ -94,6 +157,11 @@ export async function executeDebugCommand(command) {
                 } else {
                     add('You are NOT in a group (context.groupId is null/undefined).');
                     add('Single character mode.');
+                    const charId = state.context.characterId;
+                    if (charId !== null && charId !== undefined) {
+                        const char = state.context.characters?.[charId];
+                        add(`  Character: "${char?.name || 'unknown'}" (index=${charId})`);
+                    }
                 }
                 break;
             }
@@ -106,32 +174,60 @@ export async function executeDebugCommand(command) {
                 state.cachedGroups = groups;
                 add(`Loaded ${groups.length} groups`);
                 add('');
-                for (let i = 0; i < groups.length; i++) {
-                    const g = groups[i];
-                    const chatsPreview = Array.isArray(g.chats)
-                        ? `[${g.chats.length} chats, last="${g.chats[g.chats.length - 1] || 'none'}"]`
-                        : 'no chats array';
-                    add(`[${i}] "${g.name}"`);
-                    add(`    id=${g.id}  chat_id="${g.chat_id}"`);
-                    add(`    members=${JSON.stringify(g.members || [])}`);
-                    add(`    disabled_members=${JSON.stringify(g.disabled_members || [])}`);
-                    add(`    ${chatsPreview}`);
+                if (groups.length === 0) {
+                    add('No groups exist on this ST instance.');
+                    add('This is normal if you only use single-character chats.');
+                } else {
+                    for (let i = 0; i < groups.length; i++) {
+                        const g = groups[i];
+                        const chatsPreview = Array.isArray(g.chats)
+                            ? `[${g.chats.length} chats, last="${g.chats[g.chats.length - 1] || 'none'}"]`
+                            : 'no chats array';
+                        add(`[${i}] "${g.name}"`);
+                        add(`    id=${g.id}  chat_id="${g.chat_id}"`);
+                        add(`    members=${JSON.stringify(g.members || [])}`);
+                        add(`    disabled_members=${JSON.stringify(g.disabled_members || [])}`);
+                        add(`    ${chatsPreview}`);
+                    }
                 }
+                add('');
+                add(`Current context.groupId: ${state.context.groupId ?? 'null (single-char mode)'}`);
                 break;
             }
 
             case 'find_group': {
                 add('=== Finding Active Group ===');
                 add('');
+                const currentGroupId = state.context.groupId || null;
+                add(`context.groupId: ${currentGroupId ?? 'null (single-char mode)'}`);
+                add('');
+
+                if (!currentGroupId) {
+                    add('RESULT: Single-character mode (context.groupId is null)');
+                    add('');
+                    const charId = state.context.characterId;
+                    if (charId !== null && charId !== undefined) {
+                        const char = state.context.characters?.[charId];
+                        if (char) {
+                            add(`Active character: "${char.name}" (index=${charId})`);
+                            add(`Avatar: "${char.avatar || ''}"`);
+                        }
+                    }
+                    add('');
+                    add('Extension state:');
+                    add(`  isGroupChat: ${state.isGroupChat}`);
+                    if (state.isGroupChat) {
+                        add('  BUG: isGroupChat is true but context.groupId is null!');
+                        add('  This is a false group detection bug. Try reloading group data.');
+                    }
+                    break;
+                }
+
                 if (!state.cachedGroups) {
                     add('Groups not loaded yet. Run "Load & Dump Groups" first.');
                     break;
                 }
                 add(`cachedGroups: ${state.cachedGroups.length} groups loaded`);
-                const currentChatId = typeof state.context.getCurrentChatId === 'function'
-                    ? state.context.getCurrentChatId() : null;
-                const currentGroupId = state.context.groupId || null;
-                add(`Input: chatId=${currentChatId}, groupId=${currentGroupId}`);
                 add('');
 
                 const found = findActiveGroup(state.cachedGroups);
@@ -150,52 +246,73 @@ export async function executeDebugCommand(command) {
                         add('');
                         add('*** WARNING: Global activeGroup does NOT match findActiveGroup() result! ***');
                         add(`  activeGroup is still set to "${state.activeGroup.name}" (id=${state.activeGroup.id})`);
-                        add('  This can happen if loadGroupData() ran before getCurrentChatId() was ready.');
-                        add('  Fix: switch chats or reload the page (the proactive hook will re-run).');
+                        add('  This can happen if loadGroupData() ran before context was ready.');
+                        add('  Fix: switch chats or reload the page.');
                     }
                 } else {
-                    add('RESULT: NO MATCH FOUND — single character mode');
-                    add('');
-                    add('Check the console (F12) for the detailed matching log.');
-                    add('The findActiveGroup() function logs every step.');
+                    add(`RESULT: groupId="${currentGroupId}" NOT FOUND in cached groups`);
+                    add('This is unusual — the group may have been deleted.');
                 }
                 break;
             }
 
             case 'group_members': {
-                add('=== Group Members ===');
-                add('');
-                if (!state.isGroupChat || !state.activeGroup) {
-                    add('Not in group mode. No active group.');
-                    break;
-                }
-                add(`Active group: "${state.activeGroup.name}" (id=${state.activeGroup.id})`);
-                add(`Resolved members: ${state.activeGroupCharacters.length}`);
-                add('');
-                for (let i = 0; i < state.activeGroupCharacters.length; i++) {
-                    const c = state.activeGroupCharacters[i];
-                    add(`[${i}] ${c.name || '(unnamed)'}`);
-                    add(`    avatar="${c.avatar || ''}"`);
-                    if (c._unresolved) {
-                        add('    *** UNRESOLVED — could not find full character data ***');
-                    } else {
-                        add(`    description: ${(c.description || '').substring(0, 100)}${(c.description || '').length > 100 ? '...' : ''}`);
-                        add(`    personality: ${(c.personality || '').substring(0, 80)}${(c.personality || '').length > 80 ? '...' : ''}`);
-                        add(`    scenario: ${(c.scenario || '').substring(0, 80)}${(c.scenario || '').length > 80 ? '...' : ''}`);
-                        add(`    first_mes: ${(c.first_mes || '').substring(0, 80)}${(c.first_mes || '').length > 80 ? '...' : ''}`);
-
-                        // Show char config (brain button) data
-                        if (c.data?.extensions?.agent_statesync) {
-                            const cc = c.data.extensions.agent_statesync;
-                            add(`    [Agent Config] mode=${cc.mode || 'characters'}, names=${JSON.stringify(cc.names || [])}`);
+                if (state.isGroupChat && state.activeGroup) {
+                    add('=== Group Members ===');
+                    add('');
+                    add(`Active group: "${state.activeGroup.name}" (id=${state.activeGroup.id})`);
+                    add(`Resolved members: ${state.activeGroupCharacters.length}`);
+                    add('');
+                    for (let i = 0; i < state.activeGroupCharacters.length; i++) {
+                        const c = state.activeGroupCharacters[i];
+                        add(`[${i}] ${c.name || '(unnamed)'}`);
+                        add(`    avatar="${c.avatar || ''}"`);
+                        if (c._unresolved) {
+                            add('    *** UNRESOLVED — could not find full character data ***');
                         } else {
-                            add(`    [Agent Config] (default — no brain button config)`);
+                            add(`    description: ${(c.description || '').substring(0, 100)}${(c.description || '').length > 100 ? '...' : ''}`);
+                            add(`    personality: ${(c.personality || '').substring(0, 80)}${(c.personality || '').length > 80 ? '...' : ''}`);
+                            add(`    scenario: ${(c.scenario || '').substring(0, 80)}${(c.scenario || '').length > 80 ? '...' : ''}`);
+                            add(`    first_mes: ${(c.first_mes || '').substring(0, 80)}${(c.first_mes || '').length > 80 ? '...' : ''}`);
+
+                            // Show char config (brain button) data
+                            if (c.data?.extensions?.agent_statesync) {
+                                const cc = c.data.extensions.agent_statesync;
+                                add(`    [Agent Config] mode=${cc.mode || 'characters'}, names=${JSON.stringify(cc.names || [])}`);
+                            } else {
+                                add(`    [Agent Config] (default — no brain button config)`);
+                            }
                         }
                     }
-                }
-                if (state.activeGroup.disabled_members && state.activeGroup.disabled_members.length) {
+                    if (state.activeGroup.disabled_members && state.activeGroup.disabled_members.length) {
+                        add('');
+                        add(`Disabled members: ${JSON.stringify(state.activeGroup.disabled_members)}`);
+                    }
+                } else {
+                    add('=== Single Character Info ===');
                     add('');
-                    add(`Disabled members: ${JSON.stringify(state.activeGroup.disabled_members)}`);
+                    const charId = state.context.characterId;
+                    if (charId !== null && charId !== undefined) {
+                        const char = state.context.characters?.[charId];
+                        if (char) {
+                            add(`Name: "${char.name}"`);
+                            add(`Avatar: "${char.avatar || ''}"`);
+                            add(`description: ${(char.description || '').substring(0, 150)}${(char.description || '').length > 150 ? '...' : ''}`);
+                            add(`personality: ${(char.personality || '').substring(0, 100)}${(char.personality || '').length > 100 ? '...' : ''}`);
+                            add(`scenario: ${(char.scenario || '').substring(0, 100)}${(char.scenario || '').length > 100 ? '...' : ''}`);
+                            // Show char config (brain button) data
+                            if (char.data?.extensions?.agent_statesync) {
+                                const cc = char.data.extensions.agent_statesync;
+                                add(`[Agent Config] mode=${cc.mode || 'characters'}, names=${JSON.stringify(cc.names || [])}`);
+                            } else {
+                                add(`[Agent Config] (default — no brain button config)`);
+                            }
+                        } else {
+                            add(`No character found at index ${charId}`);
+                        }
+                    } else {
+                        add('No character selected.');
+                    }
                 }
                 break;
             }
@@ -217,6 +334,16 @@ export async function executeDebugCommand(command) {
                 add('=== Session Init Payload Preview (v3.0) ===');
                 add('');
                 add(`Mode: ${state.isGroupChat ? 'GROUP' : 'SINGLE CHARACTER'}`);
+                if (!state.isGroupChat) {
+                    const charId = state.context.characterId;
+                    const char = charId !== null && charId !== undefined
+                        ? state.context.characters?.[charId] : null;
+                    if (char) {
+                        add(`Character: "${char.name}"`);
+                    }
+                } else if (state.activeGroup) {
+                    add(`Group: "${state.activeGroup.name}" (${state.activeGroupCharacters.length} members)`);
+                }
                 add('');
 
                 // Build the actual payload using the same logic as initSession()
@@ -279,8 +406,8 @@ export async function executeDebugCommand(command) {
                 add(state.lastInterceptLog.metaTag);
                 break;
             }
-                        
-                        case 'persona': {
+
+            case 'persona': {
                 add('=== Persona / User Description Search ===');
                 add('');
 

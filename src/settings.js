@@ -105,11 +105,12 @@ export function buildPromptSettingsPayload(charOverrides) {
 // Debug command definitions for the debug panel dropdown
 export const DEBUG_COMMANDS = [
     { value: '', label: '-- Select debug command --' },
+    { value: 'chat_mode', label: 'Chat Mode Detection' },
     { value: 'context_dump', label: 'Dump ST Context' },
     { value: 'chat_ids', label: 'Chat ID & Group ID' },
     { value: 'load_groups', label: 'Load & Dump Groups' },
     { value: 'find_group', label: 'Find Active Group' },
-    { value: 'group_members', label: 'Group Members' },
+    { value: 'group_members', label: 'Group Members / Single Char' },
     { value: 'preview_meta', label: 'Preview SYSTEM_META' },
     { value: 'init_payload', label: 'Preview Init Payload' },
     { value: 'session_lookup', label: 'Session Metadata' },

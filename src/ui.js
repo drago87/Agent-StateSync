@@ -90,10 +90,15 @@ export function hookChatEvents() {
             const settings = getSettings();
             if (settings.enabled) {
                 startHealthChecks();
-                // Proactive session setup for the new chat (silent)
-                proactiveChatChanged().then(() => {
-                    updateInitButtonVisibility();
-                });
+                // Delay 300ms before proactive setup to let ST update
+                // context.groupId and other context properties. Without this
+                // delay, groupId may still reflect the PREVIOUS chat, causing
+                // wrong group/single-char detection.
+                setTimeout(() => {
+                    proactiveChatChanged().then(() => {
+                        updateInitButtonVisibility();
+                    });
+                }, 300);
             }
         });
     }

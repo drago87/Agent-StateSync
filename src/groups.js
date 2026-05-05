@@ -3,7 +3,10 @@
 // Fetches group data from SillyTavern's server API, finds the active group
 // for the current chat, resolves member avatars to full Character objects,
 // and caches everything for the interceptor pipeline.
-// File Version: 1.0.0
+//
+// Group detection uses context.groupId (camelCase) as the primary signal.
+// If groupId is null/undefined, we are in single-character mode.
+// File Version: 1.1.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';
@@ -36,15 +39,14 @@ export async function fetchGroupsFromServer() {
 }
 
 /**
- * Find the currently active group by matching chat_id against
- * the current chat ID from ST's context.
+ * Find the currently active group for the current chat.
  *
- * Match priority:
- *  1. context.group_id  vs  group.id        (most reliable in group mode)
- *  2. getCurrentChatId() vs group.chat_id   (current active chat)
- *  3. getCurrentChatId() vs group.id         (unlikely but possible)
- *  4. getCurrentChatId() in group.chats[]    (historical chats)
- *  5. Fallback: context.name2 === 'SillyTavern System' heuristic
+ * Uses context.groupId (camelCase) as the ONLY reliable signal.
+ * - If context.groupId is set → find the matching group by ID
+ * - If context.groupId is null/undefined → single-character mode (return null)
+ *
+ * No chat ID matching or heuristics — those caused false positives
+ * where single-character chats were incorrectly detected as groups.
  */
 export function findActiveGroup(groups) {
     if (!groups || groups.length === 0) {
@@ -52,15 +54,19 @@ export function findActiveGroup(groups) {
         return null;
     }
 
-    const currentChatId = typeof state.context.getCurrentChatId === 'function'
-        ? state.context.getCurrentChatId()
-        : null;
+    // ST sets context.groupId (camelCase!) when viewing a group chat.
+    // This is the most reliable signal — if it's null/undefined, we're
+    // in single-character mode and should NOT match any group.
+    const currentGroupId = state.context.groupId || null;
 
-    // ST sets context.group_id when viewing a group chat.
-    // This is the most reliable signal — use it first.
-    const currentGroupId = state.context.group_id || state.context.chat?.group_id || null;
+    // Quick exit: if groupId is not set, we're definitely NOT in a group chat.
+    // No need to scan groups at all.
+    if (!currentGroupId) {
+        console.log(`[${EXTENSION_NAME}] findActiveGroup: context.groupId is null → single-character mode`);
+        return null;
+    }
 
-    console.log(`[${EXTENSION_NAME}] findActiveGroup: chatId=${currentChatId}, groupId=${currentGroupId}, name2="${state.context.name2 || ''}"`);
+    console.log(`[${EXTENSION_NAME}] findActiveGroup: groupId=${currentGroupId}, name2="${state.context.name2 || ''}"`);
 
     // Log each group for diagnosis (only first 20 to avoid spam)
     const logGroups = groups.slice(0, 20);
@@ -71,73 +77,15 @@ export function findActiveGroup(groups) {
         console.log(`[${EXTENSION_NAME}]   Group "${group.name}": id=${group.id}, chat_id=${group.chat_id}, ${chatsPreview}`);
     }
 
-    // --- Match 1: group.id === context.group_id (most reliable) ---
-    if (currentGroupId) {
-        for (const group of groups) {
-            if (group.id === currentGroupId) {
-                console.log(`[${EXTENSION_NAME}]   -> MATCHED by context.group_id === group.id`);
-                return group;
-            }
-        }
-        console.warn(`[${EXTENSION_NAME}]   context.group_id=${currentGroupId} did not match any group.id`);
-    }
-
-    // --- Match 2 & 3: group.chat_id or group.id === currentChatId ---
-    if (currentChatId) {
-        for (const group of groups) {
-            if (group.chat_id === currentChatId) {
-                console.log(`[${EXTENSION_NAME}]   -> MATCHED by group.chat_id`);
-                return group;
-            }
-        }
-        for (const group of groups) {
-            if (group.id === currentChatId) {
-                console.log(`[${EXTENSION_NAME}]   -> MATCHED by group.id`);
-                return group;
-            }
-        }
-
-        // --- Match 4: currentChatId in group.chats[] ---
-        for (const group of groups) {
-            if (Array.isArray(group.chats) && group.chats.includes(currentChatId)) {
-                console.log(`[${EXTENSION_NAME}]   -> MATCHED by group.chats[]`);
-                return group;
-            }
+    // --- Match 1: group.id === context.groupId (most reliable) ---
+    // We already know currentGroupId is set (checked above).
+    for (const group of groups) {
+        if (group.id === currentGroupId) {
+            console.log(`[${EXTENSION_NAME}]   -> MATCHED by context.groupId === group.id`);
+            return group;
         }
     }
-
-    // --- Fallback: 'SillyTavern System' heuristic ---
-    // In ST, context.name2 is set to 'SillyTavern System' when viewing a
-    // group chat (it's ST's default group persona).  If we see this but
-    // couldn't match by ID, we know we're in a group — try harder.
-    if (state.context.name2 === 'SillyTavern System') {
-        console.warn(`[${EXTENSION_NAME}]   -> FALLBACK: name2='SillyTavern System' but no ID match found`);
-
-        // If context.group_id exists, we already tried it above and failed.
-        // Try matching by looking for the group whose chat_id matches
-        // whatever the "current" chat ID is reported as.
-        if (currentGroupId && !currentChatId) {
-            // We have a group_id but no chat_id — match was already attempted
-            console.warn(`[${EXTENSION_NAME}]   -> Have group_id=${currentGroupId} but no chat_id; group ID not found in list`);
-        }
-
-        // Last resort: use the first group that has a chat_id set.
-        // This is a heuristic — it might be wrong if the user has multiple
-        // groups, but it's better than returning null.
-        for (const group of groups) {
-            if (group.chat_id) {
-                console.warn(`[${EXTENSION_NAME}]   -> Using first group with chat_id: "${group.name}" (MAY BE WRONG — check console)`);
-                return group;
-            }
-        }
-        // Even more desperate: return the first group
-        if (groups.length === 1) {
-            console.warn(`[${EXTENSION_NAME}]   -> Only 1 group exists, using it: "${groups[0].name}"`);
-            return groups[0];
-        }
-    }
-
-    console.log(`[${EXTENSION_NAME}]   -> NO MATCH FOUND`);
+    console.warn(`[${EXTENSION_NAME}]   context.groupId=${currentGroupId} did not match any group.id — treating as single-char`);
     return null;
 }
 
@@ -188,6 +136,7 @@ export async function loadGroupData() {
     state.cachedGroups = groups;
 
     console.log(`[${EXTENSION_NAME}] Loaded ${groups.length} groups from server`);
+    console.log(`[${EXTENSION_NAME}] context.groupId = ${state.context.groupId ?? 'null (single-char mode)'}`);
 
     const found = findActiveGroup(groups);
 
