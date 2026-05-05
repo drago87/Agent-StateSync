@@ -4,103 +4,23 @@
 // POST /api/sessions/{id}/init.  Handles single-character,
 // multi-character, scenario, and group chat formats.
 //
-// tracked_field_additions payload format (v3):
-//   { character: { "FieldName": { type, hint, ... } }, scenario: { ... }, shared: { ... } }
-//   Empty categories are excluded.
-//
 // Extracted from session.js to keep the payload builder
 // separate from the session lifecycle management.
-// File Version: 1.2.0
+// File Version: 1.0.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, CHAR_CONFIG_EXT_KEY,
     buildPromptSettingsPayload,
 } from './settings.js';
-import { getCharInitType, getCharInitNames, getTrackedFieldAdditionsForChar } from './char-config.js';
-import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions, getPersonaType } from './persona-config.js';
+import { getCharInitType, getCharInitNames } from './char-config.js';
+import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions } from './persona-config.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
+import { getFreshContext } from './groups.js';
 
 // #############################################
 // # Payload Helper Functions
 // #############################################
-
-/**
- * Normalize is_dynamic values for the payload.
- * Internal format: false, true, "Per-Character", "Situation-Based"
- * Payload format: omit if false, "True" if true, "Per-Character", "Situation-Based"
- */
-function normalizeIsDynamic(val) {
-    if (val === true) return 'True';
-    if (val === 'Per-Character' || val === 'Situation-Based') return val;
-    // false, undefined, null, etc. — not dynamic
-    return undefined;
-}
-
-/**
- * Walk a tracked fields object (dict format from global settings)
- * and normalize all is_dynamic values for the payload.
- * Mutates the object in place.
- */
-function normalizeTrackedFields(obj) {
-    if (!obj || typeof obj !== 'object') return;
-    for (const key of Object.keys(obj)) {
-        const field = obj[key];
-        if (!field || typeof field !== 'object') continue;
-
-        if (field.fields !== undefined) {
-            // It's a group
-            const normalized = normalizeIsDynamic(field.is_dynamic);
-            if (normalized === undefined) {
-                delete field.is_dynamic;
-            } else {
-                field.is_dynamic = normalized;
-            }
-            // Recurse into sub-fields
-            normalizeTrackedFields(field.fields);
-        }
-    }
-}
-
-/**
- * Walk a tracked_field_additions payload object (categorized dict format)
- * and normalize all is_dynamic values.
- * The payload format is: { character: { fieldName: { ... } }, scenario: { ... }, shared: { ... } }
- * Mutates the object in place.
- */
-function normalizeTFAdditions(obj) {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
-    for (const catKey of Object.keys(obj)) {
-        const category = obj[catKey];
-        if (!category || typeof category !== 'object') continue;
-        // Walk each field in the category
-        normalizeTFAdditionsFields(category);
-    }
-}
-
-/**
- * Walk a single category's fields (dict format: { fieldName: { ... } })
- * and normalize is_dynamic values recursively.
- */
-function normalizeTFAdditionsFields(fields) {
-    if (!fields || typeof fields !== 'object') return;
-    for (const key of Object.keys(fields)) {
-        const field = fields[key];
-        if (!field || typeof field !== 'object') continue;
-
-        if (field.fields !== undefined) {
-            // It's a group
-            const normalized = normalizeIsDynamic(field.is_dynamic);
-            if (normalized === undefined) {
-                delete field.is_dynamic;
-            } else {
-                field.is_dynamic = normalized;
-            }
-            // Recurse into sub-fields
-            normalizeTFAdditionsFields(field.fields);
-        }
-    }
-}
 
 /**
  * Build the character/scenario data object from a character's card fields.
@@ -136,33 +56,19 @@ function buildCardData(charData, firstMesOverride) {
  * Build the persona object. Excludes empty fields.
  */
 function buildPersona() {
+    const ctx = getFreshContext();
     const persona = {};
 
-    const name = state.context.name1 || '';
+    const name = ctx.name1 || '';
     if (name) persona.name = name;
 
-    const desc = state.context.powerUserSettings?.persona_description || '';
+    const desc = ctx.powerUserSettings?.persona_description || '';
     if (desc) persona.description = desc;
 
-    // Persona type (character, narrator, system, observer)
-    persona.type = getPersonaType();
-
-    // Per-persona tracked field additions (categorized dict format)
+    // Per-persona tracked field additions
     const personaTFAdditions = getPersonaTrackedFieldAdditions();
     if (personaTFAdditions) {
-        persona.tracked_field_additions = JSON.parse(JSON.stringify(personaTFAdditions));
-        normalizeTFAdditions(persona.tracked_field_additions);
-        // Remove categories that became empty after normalization
-        for (const cat of ['character', 'scenario', 'shared']) {
-            const catData = persona.tracked_field_additions[cat];
-            if (catData && typeof catData === 'object' && Object.keys(catData).length === 0) {
-                delete persona.tracked_field_additions[cat];
-            }
-        }
-        // Remove tracked_field_additions entirely if no categories remain
-        if (Object.keys(persona.tracked_field_additions).length === 0) {
-            delete persona.tracked_field_additions;
-        }
+        persona.tracked_field_additions = personaTFAdditions;
     }
 
     // Per-persona prompt settings override
@@ -184,7 +90,8 @@ function buildPersona() {
  * @returns {string|null} The message text, or null if no message found
  */
 function getFirstMesFromChat(charName) {
-    const chat = state.context.chat;
+    const ctx = getFreshContext();
+    const chat = ctx.chat;
     if (!Array.isArray(chat) || chat.length === 0) return null;
 
     if (charName) {
@@ -275,22 +182,8 @@ function buildGroupMemberPayload(charObj, firstMes) {
     // --- Per-character tracked_field_additions and prompt_settings_override ---
     const extData = charObj?.data?.extensions?.[CHAR_CONFIG_EXT_KEY];
     if (extData) {
-        // tracked_field_additions: getTrackedFieldAdditionsForChar returns
-        // categorized dict format with empty categories excluded.
-        const tfAdditionsPayload = getTrackedFieldAdditionsForChar(charObj);
-        if (tfAdditionsPayload) {
-            member.tracked_field_additions = JSON.parse(JSON.stringify(tfAdditionsPayload));
-            normalizeTFAdditions(member.tracked_field_additions);
-            // Remove empty categories
-            for (const cat of ['character', 'scenario', 'shared']) {
-                const catData = member.tracked_field_additions[cat];
-                if (catData && typeof catData === 'object' && Object.keys(catData).length === 0) {
-                    delete member.tracked_field_additions[cat];
-                }
-            }
-            if (Object.keys(member.tracked_field_additions).length === 0) {
-                delete member.tracked_field_additions;
-            }
+        if (Array.isArray(extData.tracked_field_additions) && extData.tracked_field_additions.length > 0) {
+            member.tracked_field_additions = extData.tracked_field_additions;
         }
         if (extData.prompt_settings_override && typeof extData.prompt_settings_override === 'object') {
             const overrides = { ...extData.prompt_settings_override };
@@ -371,9 +264,10 @@ export function buildInitPayload() {
 function buildSingleCharInitPayload() {
     const cardType = getCharInitType();      // 'character' | 'multi-character' | 'scenario'
     const cardNames = getCharInitNames();   // [] for character/scenario, ['Alice','Bob'] for multi
-    const cardName = state.context.name2 || '';
+    const ctx = getFreshContext();
+    const cardName = ctx.name2 || '';
     const firstMes = getFirstMesFromChat(null);
-    const cardData = buildCardData(state.context, firstMes);
+    const cardData = buildCardData(ctx, firstMes);
     const persona = buildPersona();
 
     const payload = {
@@ -383,7 +277,7 @@ function buildSingleCharInitPayload() {
         card_name: cardName,
     };
         // Chat name (character card name)
-        const chatName = state.context.name2 || '';
+        const chatName = ctx.name2 || '';
         if (chatName) payload.chat_name = chatName;
 
     // For multi-character, include character_names
@@ -415,16 +309,13 @@ function buildSingleCharInitPayload() {
         );
         if (hasContent) {
             payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
-            normalizeTrackedFields(payload.tracked_fields.character);
-            normalizeTrackedFields(payload.tracked_fields.scenario);
-            normalizeTrackedFields(payload.tracked_fields.shared);
         }
     }
 
     // Global prompt_settings (merged with per-character + persona overrides)
-    const charConfig = state.context.characters?.[state.context.characterFilter]
+    const charConfig = ctx.characters?.[ctx.characterFilter]
         ?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]
-        || state.context.chatMetadata?.[CHAR_CONFIG_EXT_KEY]
+        || ctx.chatMetadata?.[CHAR_CONFIG_EXT_KEY]
         || null;
     const charOverrides = charConfig?.prompt_settings_override || null;
     let promptSettings = buildPromptSettingsPayload(charOverrides);
@@ -453,7 +344,8 @@ function buildGroupInitPayload() {
 
     // --- Determine member ordering by first message in chat ---
     // Build a map of char name -> first message index
-    const chat = state.context.chat;
+    const gCtx = getFreshContext();
+    const chat = gCtx.chat;
     const nameToFirstIndex = new Map();
     if (Array.isArray(chat) && chat.length > 0) {
         for (let i = 0; i < chat.length; i++) {
@@ -503,8 +395,8 @@ function buildGroupInitPayload() {
         group_members: memberPayloads,
     };
 
-        // Chat name (group name)
-        const chatName = state.context.groups?.find(g => g.id === state.context.groupId)?.name || '';
+        // Chat name (group name) — use activeGroup directly, not stale context
+        const chatName = state.activeGroup?.name || '';
         if (chatName) payload.chat_name = chatName;
 
     // group_scenario: include only if non-empty
@@ -526,9 +418,6 @@ function buildGroupInitPayload() {
         );
         if (hasContent) {
             payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
-            normalizeTrackedFields(payload.tracked_fields.character);
-            normalizeTrackedFields(payload.tracked_fields.scenario);
-            normalizeTrackedFields(payload.tracked_fields.shared);
         }
     }
 

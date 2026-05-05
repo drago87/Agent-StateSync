@@ -12,21 +12,13 @@
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
 //
-// POST /api/sessions response format:
-//   { status, session_id, last_changed, rp_llm, instruct_backends }
-//   - status: "ok" or error indicator
-//   - last_changed: timestamp for config change detection
-//   - rp_llm/instruct_backends: LLM health info (same as /api/backends/health)
-//   After session creation, fetchLlmConfig() is called to compare
-//   last_changed with /api/backends/health and update if newer.
-//
 // Health guards (manual init):
 //   - RP LLM status is ignored for init (only matters for message generation)
 //   - At least one Instruct backend must be "Healthy" for init to proceed
 //   - If some Instruct backends are unhealthy but at least one is Healthy,
 //     init proceeds with a warning (may go slower)
 //   - If NO Instruct backends are Healthy, init is blocked with an error
-// File Version: 1.9.0
+// File Version: 1.7.0
 
 import state from './state.js';
 import {
@@ -35,7 +27,7 @@ import {
     updateStatus,
 } from './settings.js';
 import { getAgentOrigin, fetchLlmConfig } from './agent-url.js';
-import { loadGroupData } from './groups.js';
+import { loadGroupData, getFreshContext } from './groups.js';
 import { buildInitPayload } from './init-payload.js';
 import { startNotificationPolling } from './notifications.js';
 
@@ -212,14 +204,13 @@ async function attachToExistingSession(origin, sessionId) {
         state.configSynced = false;
         await syncConfigToAgent(getSettings(), origin);
 
-        // Fetch the Agent's LLM config (may have changed since last connection).
-        // Compares last_changed with /api/backends/health and updates if newer.
+        // Fetch the Agent's LLM config (may have changed since last connection)
         await fetchLlmConfig();
 
         const shortId = sessionId.substring(0, 8);
         const chatLabel = state.isGroupChat && state.activeGroup
             ? `Group "${state.activeGroup.name}"`
-            : `"${state.context.name2 || 'Unknown'}"`;
+            : `"${getFreshContext().name2 || 'Unknown'}"`;
         toastr.success(`Resumed session (${shortId}...) for ${chatLabel}`, 'Agent-StateSync');
         updateStatus(`Session ${shortId}...`, '#5cb85c');
         startNotificationPolling();
@@ -237,7 +228,7 @@ async function attachToExistingSession(origin, sessionId) {
 async function showNewChatConfirm(origin, chatId) {
     const chatLabel = state.isGroupChat && state.activeGroup
         ? `Group "${state.activeGroup.name}" (${state.activeGroupCharacters.length} members)`
-        : `Character "${state.context.name2 || 'Unknown'}"`;
+        : `Character "${getFreshContext().name2 || 'Unknown'}"`;
 
     // Check Instruct backend health for warnings
     // RP LLM status is ignored for init — only Instruct backends matter
@@ -293,53 +284,12 @@ async function showNewChatConfirm(origin, chatId) {
     updateStatus('No session (not initialized)', '#f0ad4e');
 }
 
-// #############################################
-// # Helper: Parse POST /api/sessions response
-// #############################################
-
-/**
- * Parse the response from POST /api/sessions.
- * Expected format:
- *   { status: "ok", session_id: "...", last_changed: "...",
- *     rp_llm: { alias, health }, instruct_backends: [{ alias, health }] }
- *
- * Stores last_changed and LLM config, then fetches /api/backends/health
- * to compare timestamps and update if the health endpoint is newer.
- */
-function handleSessionResponse(data) {
-    // Store last_changed from the session response
-    if (data.last_changed !== undefined) {
-        const prevChanged = state.lastChanged;
-        state.lastChanged = data.last_changed;
-        if (prevChanged !== null && prevChanged !== data.last_changed) {
-            console.log(`[${EXTENSION_NAME}] Agent LLM config changed at ${data.last_changed}`);
-        }
-    }
-
-    // Parse LLM config from the session response if included
-    if (data.rp_llm || data.instruct_backends) {
-        storeLlmConfig(data);
-        console.log(`[${EXTENSION_NAME}] LLM config received from session creation response.`);
-    }
-
-    // Log status
-    if (data.status) {
-        console.log(`[${EXTENSION_NAME}] Session response status: ${data.status}`);
-    }
-}
-
 /**
  * Create a new Agent session linked to the current ST chat ID,
  * then initialize it with character/group data.
  *
- * The Agent's response includes:
- *   - status: "ok"
- *   - session_id: the new session ID
- *   - last_changed: timestamp for config change detection
- *   - rp_llm / instruct_backends: LLM health info
- *
- * After creation, fetchLlmConfig() is called to compare last_changed
- * with /api/backends/health and update STe if the health endpoint is newer.
+ * The Agent's response may include LLM config (rp_llm and instruct_backends),
+ * which STe stores for display purposes.
  */
 async function createAndInitSession(origin, chatId) {
     try {
@@ -359,8 +309,11 @@ async function createAndInitSession(origin, chatId) {
         const sessionId = data.session_id;
         console.log(`[${EXTENSION_NAME}] Created session ${sessionId} for chat ${chatId}`);
 
-        // Parse status, last_changed, and LLM config from response
-        handleSessionResponse(data);
+        // Parse LLM config from the Agent's session creation response if included.
+        if (data.rp_llm || data.instruct_backends) {
+            storeLlmConfig(data);
+            console.log(`[${EXTENSION_NAME}] LLM config received from session creation response.`);
+        }
 
         // Save to metadata
         state.context.chatMetadata = state.context.chatMetadata || {};
@@ -374,10 +327,6 @@ async function createAndInitSession(origin, chatId) {
         // Sync config
         state.configSynced = false;
         await syncConfigToAgent(getSettings(), origin);
-
-        // Fetch LLM config from /api/backends/health to compare timestamps
-        // and update STe if the health endpoint has newer data.
-        await fetchLlmConfig();
 
         const shortId = sessionId.substring(0, 8);
         toastr.success(`Session created: ${shortId}...`, 'Agent-StateSync');
@@ -398,9 +347,6 @@ async function createAndInitSession(origin, chatId) {
  * Ensure a session_id exists for the current chat.
  * Used as fallback by the fetch interceptor if proactive setup didn't run.
  * Creates one via POST /api/sessions if missing.
- *
- * The Agent's response includes status, last_changed, and LLM config.
- * After creation, fetchLlmConfig() compares last_changed with /api/backends/health.
  */
 export async function ensureSession(backendOrigin) {
     // --- BYPASS MODE: return a fake session ID, don't talk to Agent ---
@@ -449,8 +395,10 @@ export async function ensureSession(backendOrigin) {
         const sessionId = data.session_id;
         console.log(`[${EXTENSION_NAME}] Fallback session created: ${sessionId}`);
 
-        // Parse status, last_changed, and LLM config from response
-        handleSessionResponse(data);
+        // Parse LLM config from the response
+        if (data.rp_llm || data.instruct_backends) {
+            storeLlmConfig(data);
+        }
 
         state.context.chatMetadata = state.context.chatMetadata || {};
         state.context.chatMetadata[META_KEY_SESSION] = sessionId;
@@ -458,9 +406,6 @@ export async function ensureSession(backendOrigin) {
         await state.context.saveMetadata();
 
         await initSession(backendOrigin, sessionId);
-
-        // Fetch LLM config from /api/backends/health to compare timestamps
-        fetchLlmConfig();
 
         return sessionId;
     } catch (err) {
@@ -474,7 +419,6 @@ export async function ensureSession(backendOrigin) {
  * Creates a session if needed, initializes it, and starts polling.
  *
  * Health guards:
- *   - Fetches fresh health data before checking.
  *   - RP LLM status is ignored (only relevant for message generation, not init).
  *   - If at least one Instruct backend is healthy, init proceeds.
  *     If some are unhealthy, a warning is shown (may be slower).
@@ -487,15 +431,6 @@ export async function manualInitSession() {
     if (!origin) {
         toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
         return false;
-    }
-
-    // --- Fetch fresh health data before checking ---
-    // The health data may not be loaded yet (initial state is empty arrays).
-    // Fetch from the Agent so we have current LLM status.
-    try {
-        await fetchLlmConfig();
-    } catch (e) {
-        console.warn(`[${EXTENSION_NAME}] Health data fetch failed before init:`, e.message);
     }
 
     // --- Check Instruct backend health (required for init) ---
@@ -551,7 +486,7 @@ export async function manualInitSession() {
         state.configSynced = false;
         await syncConfigToAgent(getSettings(), origin);
 
-        // Fetch the Agent's LLM config (compares last_changed with /api/backends/health)
+        // Fetch the Agent's LLM config
         await fetchLlmConfig();
 
         // Start notification polling

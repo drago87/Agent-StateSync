@@ -2,13 +2,16 @@
 //
 // Executes diagnostic commands and returns formatted output strings
 // for display in the debug panel textbox.
-// File Version: 1.1.0
+//
+// IMPORTANT: Always uses getFreshContext() to get CURRENT values,
+// not the stale state.context snapshot from init time.
+// File Version: 1.2.0
 
 import state from './state.js';
 import {
     EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER, META_KEY_INITIALIZED,
 } from './settings.js';
-import { fetchGroupsFromServer, findActiveGroup, loadGroupData } from './groups.js';
+import { fetchGroupsFromServer, findActiveGroup, loadGroupData, getFreshContext } from './groups.js';
 import { buildMetaTag, getMessageId } from './pipeline.js';
 import { buildInitPayload } from './init-payload.js';
 
@@ -32,14 +35,22 @@ export async function executeDebugCommand(command) {
                 add('=== Chat Mode Detection ===');
                 add('');
 
-                // Primary signal from SillyTavern
-                const groupId = state.context.groupId ?? null;
-                const characterId = state.context.characterId ?? null;
-                const name2 = state.context.name2 || '(empty)';
-                const chatId = typeof state.context.getCurrentChatId === 'function'
-                    ? state.context.getCurrentChatId() : null;
+                // Get FRESH context — state.context may be stale!
+                const ctx = getFreshContext();
+                const staleGroupId = state.context.groupId ?? null;
+                const groupId = ctx.groupId ?? null;
+                const characterId = ctx.characterId ?? null;
+                const name2 = ctx.name2 || '(empty)';
+                const chatId = typeof ctx.getCurrentChatId === 'function'
+                    ? ctx.getCurrentChatId() : null;
 
-                add('--- SillyTavern Context Signals ---');
+                add('--- Fresh vs Stale Context ---');
+                add(`fresh context.groupId:  ${groupId ?? 'null'}`);
+                add(`stale state.context.groupId: ${staleGroupId ?? 'null'}`);
+                add(`stale === fresh? ${staleGroupId === groupId ? 'YES (OK)' : 'NO (STALE — this is the bug!)'}`);
+                add('');
+
+                add('--- SillyTavern Context Signals (fresh) ---');
                 add(`context.groupId:     ${groupId ?? 'null (NOT a group)'}`);
                 add(`context.characterId: ${characterId ?? 'null'}`);
                 add(`context.name2:       "${name2}"`);
@@ -69,11 +80,12 @@ export async function executeDebugCommand(command) {
                     }
                     if (!state.isGroupChat) {
                         add(`  BUG: context.groupId is set but state.isGroupChat is false!`);
+                        add(`  loadGroupData() needs to be called to sync.`);
                     }
                 } else {
                     add('MODE: SINGLE CHARACTER (context.groupId is null)');
                     if (characterId !== null && characterId !== undefined) {
-                        const char = state.context.characters?.[characterId];
+                        const char = ctx.characters?.[characterId];
                         if (char) {
                             add(`  Character: "${char.name}" (index=${characterId})`);
                             add(`  Avatar: "${char.avatar || ''}"`);
@@ -85,7 +97,7 @@ export async function executeDebugCommand(command) {
                     }
                     if (state.isGroupChat) {
                         add(`  BUG: context.groupId is null but state.isGroupChat is true!`);
-                        add(`  This is a false group detection bug.`);
+                        add(`  This is a false group detection bug — stale context was used.`);
                     }
                 }
                 break;
@@ -94,24 +106,36 @@ export async function executeDebugCommand(command) {
             case 'context_dump': {
                 add('=== SillyTavern Context Dump ===');
                 add('');
-                add(`context.groupId (selected_group): ${state.context.groupId ?? 'null (NOT SET)'}`);
-                add(`context.chatId (computed):       ${state.context.chatId ?? 'null (NOT SET)'}`);
-                add(`context.characterId (this_chid): ${state.context.characterId ?? 'null'}`);
-                add(`context.name1 (persona):         ${state.context.name1 ?? '(empty)'}`);
-                add(`context.name2 (character/group):  ${state.context.name2 ?? '(empty)'}`);
-                add(`context.onlineStatus:            ${state.context.onlineStatus ?? 'null'}`);
-                add(`context.maxContext:               ${state.context.maxContext}`);
+
+                // Show both fresh and stale values to highlight staleness bugs
+                const ctx = getFreshContext();
+                const stale = state.context;
+
+                add('--- Fresh Context (from getContext()) ---');
+                add(`context.groupId (selected_group): ${ctx.groupId ?? 'null (NOT SET)'}`);
+                add(`context.chatId (computed):       ${ctx.chatId ?? 'null (NOT SET)'}`);
+                add(`context.characterId (this_chid): ${ctx.characterId ?? 'null'}`);
+                add(`context.name1 (persona):         ${ctx.name1 ?? '(empty)'}`);
+                add(`context.name2 (character/group):  "${ctx.name2 ?? '(empty)'}"`);
+                add(`context.onlineStatus:            ${ctx.onlineStatus ?? 'null'}`);
+                add(`context.maxContext:               ${ctx.maxContext}`);
+                add('');
+                add('--- Stale Context (from state.context, captured at init) ---');
+                add(`stale.groupId:    ${stale.groupId ?? 'null (NOT SET)'}`);
+                add(`stale.chatId:     ${stale.chatId ?? 'null (NOT SET)'}`);
+                add(`stale.characterId: ${stale.characterId ?? 'null'}`);
+                add(`stale.name2:      "${stale.name2 ?? '(empty)'}"`);
                 add('');
                 add('--- getCurrentChatId() ---');
-                const chatId = typeof state.context.getCurrentChatId === 'function'
-                    ? state.context.getCurrentChatId() : 'FUNCTION NOT AVAILABLE';
+                const chatId = typeof ctx.getCurrentChatId === 'function'
+                    ? ctx.getCurrentChatId() : 'FUNCTION NOT AVAILABLE';
                 add(`getCurrentChatId() => ${chatId}`);
                 add('');
                 add('--- chatMetadata ---');
-                add(JSON.stringify(state.context.chatMetadata || {}, null, 2));
+                add(JSON.stringify(ctx.chatMetadata || {}, null, 2));
                 add('');
                 add('--- chat array length ---');
-                const chatArr = state.context.chat || [];
+                const chatArr = ctx.chat || [];
                 add(`context.chat.length = ${Array.isArray(chatArr) ? chatArr.length : '(not array)'}`);
                 break;
             }
@@ -119,15 +143,17 @@ export async function executeDebugCommand(command) {
             case 'chat_ids': {
                 add('=== Chat ID & Group ID Analysis ===');
                 add('');
-                const chatId = typeof state.context.getCurrentChatId === 'function'
-                    ? state.context.getCurrentChatId() : null;
-                const groupId = state.context.groupId || null;
-                const computedChatId = state.context.chatId || null;
+                const ctx = getFreshContext();
+                const chatId = typeof ctx.getCurrentChatId === 'function'
+                    ? ctx.getCurrentChatId() : null;
+                const groupId = ctx.groupId || null;
+                const computedChatId = ctx.chatId || null;
 
                 add(`getCurrentChatId():  ${chatId}`);
                 add(`context.groupId:    ${groupId}`);
                 add(`context.chatId:     ${computedChatId}`);
-                add(`context.name2:      "${state.context.name2 || ''}"`);
+                add(`context.name2:      "${ctx.name2 || ''}"`);
+                add(`context.characterId: ${ctx.characterId ?? 'null'}`);
                 add('');
                 add('--- How ST computes context.chatId (from st-context.js) ---');
                 add('For groups:   groups.find(x => x.id == selected_group)?.chat_id');
@@ -157,9 +183,9 @@ export async function executeDebugCommand(command) {
                 } else {
                     add('You are NOT in a group (context.groupId is null/undefined).');
                     add('Single character mode.');
-                    const charId = state.context.characterId;
+                    const charId = ctx.characterId;
                     if (charId !== null && charId !== undefined) {
-                        const char = state.context.characters?.[charId];
+                        const char = ctx.characters?.[charId];
                         add(`  Character: "${char?.name || 'unknown'}" (index=${charId})`);
                     }
                 }
@@ -191,23 +217,26 @@ export async function executeDebugCommand(command) {
                     }
                 }
                 add('');
-                add(`Current context.groupId: ${state.context.groupId ?? 'null (single-char mode)'}`);
+                const ctx = getFreshContext();
+                add(`Current (fresh) context.groupId: ${ctx.groupId ?? 'null (single-char mode)'}`);
                 break;
             }
 
             case 'find_group': {
                 add('=== Finding Active Group ===');
                 add('');
-                const currentGroupId = state.context.groupId || null;
-                add(`context.groupId: ${currentGroupId ?? 'null (single-char mode)'}`);
+                const ctx = getFreshContext();
+                const currentGroupId = ctx.groupId || null;
+                add(`(fresh) context.groupId: ${currentGroupId ?? 'null (single-char mode)'}`);
+                add(`(stale) state.context.groupId: ${state.context.groupId ?? 'null'}`);
                 add('');
 
                 if (!currentGroupId) {
                     add('RESULT: Single-character mode (context.groupId is null)');
                     add('');
-                    const charId = state.context.characterId;
+                    const charId = ctx.characterId;
                     if (charId !== null && charId !== undefined) {
-                        const char = state.context.characters?.[charId];
+                        const char = ctx.characters?.[charId];
                         if (char) {
                             add(`Active character: "${char.name}" (index=${charId})`);
                             add(`Avatar: "${char.avatar || ''}"`);
@@ -291,9 +320,10 @@ export async function executeDebugCommand(command) {
                 } else {
                     add('=== Single Character Info ===');
                     add('');
-                    const charId = state.context.characterId;
+                    const ctx = getFreshContext();
+                    const charId = ctx.characterId;
                     if (charId !== null && charId !== undefined) {
-                        const char = state.context.characters?.[charId];
+                        const char = ctx.characters?.[charId];
                         if (char) {
                             add(`Name: "${char.name}"`);
                             add(`Avatar: "${char.avatar || ''}"`);
@@ -335,9 +365,10 @@ export async function executeDebugCommand(command) {
                 add('');
                 add(`Mode: ${state.isGroupChat ? 'GROUP' : 'SINGLE CHARACTER'}`);
                 if (!state.isGroupChat) {
-                    const charId = state.context.characterId;
+                    const ctx = getFreshContext();
+                    const charId = ctx.characterId;
                     const char = charId !== null && charId !== undefined
-                        ? state.context.characters?.[charId] : null;
+                        ? ctx.characters?.[charId] : null;
                     if (char) {
                         add(`Character: "${char.name}"`);
                     }
@@ -411,12 +442,14 @@ export async function executeDebugCommand(command) {
                 add('=== Persona / User Description Search ===');
                 add('');
 
+                const ctx = getFreshContext();
+
                 // 1. Check context.name1
-                add(`--- context.name1: "${state.context.name1 || '(empty)'}"`);
+                add(`--- context.name1: "${ctx.name1 || '(empty)'}"`);
                 add('');
 
                 // 2. Check powerUserSettings — the correct source
-                const pu = state.context.powerUserSettings;
+                const pu = ctx.powerUserSettings;
                 if (pu) {
                     add(`--- powerUserSettings.persona_description ---`);
                     add(`  "${(pu.persona_description || '(empty)').substring(0, 300)}"`);
