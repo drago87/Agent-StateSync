@@ -19,7 +19,7 @@
 //   - If some Instruct backends are unhealthy but at least one is Healthy,
 //     init proceeds with a warning (may go slower)
 //   - If NO Instruct backends are Healthy, init is blocked with an error
-// File Version: 1.8.0
+// File Version: 1.9.0
 
 import state from './state.js';
 import {
@@ -29,7 +29,7 @@ import {
 } from './settings.js';
 import { getAgentOrigin, fetchLlmConfig } from './agent-url.js';
 import { loadGroupData, getFreshContext } from './groups.js';
-import { buildInitPayload } from './init-payload.js';
+import { buildInitPayload, getSessionIdentity } from './init-payload.js';
 import { startNotificationPolling } from './notifications.js';
 
 // #############################################
@@ -108,9 +108,14 @@ async function proactiveChatChangedWithId(origin, chatId) {
             console.warn(`[${EXTENSION_NAME}] Group data load failed (single-char fallback):`, e.message);
         }
 
+        // --- Get session identity using the same logic as buildChatInfo ---
+        const identity = getSessionIdentity();
+        const stChatId = identity.st_chat_id || chatId;  // fallback to raw chatId
+        const chatName = identity.name;
+
         // --- BYPASS MODE: skip all Agent communication ---
         if (isBypassMode()) {
-            console.log(`[${EXTENSION_NAME}] [BYPASS] Proactive setup skipped for chat ${chatId}`);
+            console.log(`[${EXTENSION_NAME}] [BYPASS] Proactive setup skipped for chat ${stChatId} (${chatName})`);
             console.log(`[${EXTENSION_NAME}] [BYPASS] Would have: health check, session lookup, init`);
             console.log(`[${EXTENSION_NAME}] [BYPASS] Group detection result: isGroupChat=${state.isGroupChat}, activeGroup=${state.activeGroup ? state.activeGroup.name : '(none)'}`);
             updateStatus('Bypass mode', '#5bc0de');
@@ -137,13 +142,13 @@ async function proactiveChatChangedWithId(origin, chatId) {
         let agentSessionId = null;
         try {
             const resp = await fetch(
-                `${origin}/api/sessions/by-chat?st_chat_id=${encodeURIComponent(chatId)}`
+                `${origin}/api/sessions/by-chat?st_chat_id=${encodeURIComponent(stChatId)}`
             );
 
             if (resp.ok) {
                 const data = await resp.json();
                 agentSessionId = data.session_id || null;
-                console.log(`[${EXTENSION_NAME}] Agent session lookup for chat "${chatId}": ${agentSessionId || 'none'}`);
+                console.log(`[${EXTENSION_NAME}] Agent session lookup for chat "${stChatId}" (${chatName}): ${agentSessionId || 'none'}`);
             } else {
                 console.warn(`[${EXTENSION_NAME}] Session lookup returned ${resp.status} (Agent may not support it yet)`);
             }
@@ -161,9 +166,9 @@ async function proactiveChatChangedWithId(origin, chatId) {
                 await fetch(`${origin}/api/sessions/${existingSessionId}/link-chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ st_chat_id: chatId }),
+                    body: JSON.stringify({ st_chat_id: stChatId, name: chatName }),
                 });
-                console.log(`[${EXTENSION_NAME}] Re-linked session ${existingSessionId} to chat ${chatId}`);
+                console.log(`[${EXTENSION_NAME}] Re-linked session ${existingSessionId} to chat ${stChatId} (${chatName})`);
             } catch (e) {
                 console.warn(`[${EXTENSION_NAME}] Failed to re-link session:`, e.message);
             }
@@ -172,7 +177,7 @@ async function proactiveChatChangedWithId(origin, chatId) {
             updateStatus(`Session ${existingSessionId.substring(0, 8)}...`, '#5cb85c');
         } else {
             // No session anywhere - ask user if they want to create one
-            await showNewChatConfirm(origin, chatId);
+            await showNewChatConfirm(origin, stChatId, chatName);
         }
 
     } catch (err) {
@@ -226,7 +231,7 @@ async function attachToExistingSession(origin, sessionId) {
  * Show an informational popup when a new chat is detected.
  * No auto-creation — reminds the user to press the Init button manually.
  */
-async function showNewChatConfirm(origin, chatId) {
+async function showNewChatConfirm(origin, stChatId, chatName) {
     const chatLabel = state.isGroupChat && state.activeGroup
         ? `Group "${state.activeGroup.name}" (${state.activeGroupCharacters.length} members)`
         : `Character "${getFreshContext().name2 || 'Unknown'}"`;
@@ -292,14 +297,14 @@ async function showNewChatConfirm(origin, chatId) {
  * The Agent's response may include LLM config (rp_llm and instruct_backends),
  * which STe stores for display purposes.
  */
-async function createAndInitSession(origin, chatId) {
+async function createAndInitSession(origin, stChatId, chatName) {
     try {
         updateStatus('Creating session...', '#f0ad4e');
 
         const resp = await fetch(`${origin}/api/sessions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ st_chat_id: chatId }),
+            body: JSON.stringify({ st_chat_id: stChatId, name: chatName }),
         });
 
         if (!resp.ok) throw new Error(`Session API returned ${resp.status}`);
@@ -308,7 +313,7 @@ async function createAndInitSession(origin, chatId) {
         if (!data.session_id) throw new Error('Invalid session response');
 
         const sessionId = data.session_id;
-        console.log(`[${EXTENSION_NAME}] Created session ${sessionId} for chat ${chatId}`);
+        console.log(`[${EXTENSION_NAME}] Created session ${sessionId} for chat ${stChatId} (${chatName})`);
 
         // Parse LLM config from the Agent's session creation response if included.
         if (data.rp_llm || data.instruct_backends) {
@@ -380,14 +385,12 @@ export async function ensureSession(backendOrigin) {
     // --- Create new session (fallback - proactive should handle this) ---
     console.log(`[${EXTENSION_NAME}] No session ID (proactive missed). Creating session...`);
     try {
-        const chatId = typeof state.context.getCurrentChatId === 'function'
-            ? state.context.getCurrentChatId()
-            : null;
+        const identity = getSessionIdentity();
 
         const resp = await fetch(`${backendOrigin}/api/sessions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ st_chat_id: chatId || '' }),
+            body: JSON.stringify({ st_chat_id: identity.st_chat_id, name: identity.name }),
         });
 
         if (!resp.ok) throw new Error(`Session API returned ${resp.status}`);

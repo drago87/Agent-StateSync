@@ -25,7 +25,7 @@
 // panel) so that the field rows have enough horizontal space for
 // all the inputs, icons, and buttons.
 //
-// File Version: 4.1.0
+// File Version: 4.1.1
 
 import state from './state.js';
 
@@ -862,10 +862,9 @@ function findField(parentObj, key) {
 function openTFModal() {
     if ($('#ass-tf-overlay').length) return;
 
-    // Reset open state — categories with fields start open
+    // Reset open state — categories start collapsed
     for (const cat of ['character', 'scenario', 'shared']) {
-        const data = currentFields[cat];
-        openCategories[cat] = data && typeof data === 'object' && Object.keys(data).length > 0;
+        openCategories[cat] = false;
     }
 
     const categoriesHtml = renderModalCategories();
@@ -1115,7 +1114,8 @@ function injectCSS() {
         background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
         border: 1px solid rgba(128, 128, 128, 0.3);
         border-radius: 10px;
-        width: 1000px;
+        min-width: 1000px !important;
+        width: 1000px !important;
         max-width: 95vw;
         max-height: 85vh;
         overflow-y: auto;

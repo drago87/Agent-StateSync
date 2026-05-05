@@ -1,4 +1,4 @@
-// init-payload.js — Agent-StateSync Init Payload Builder (v3.0)
+// init-payload.js — Agent-StateSync Init Payload Builder (v3.1)
 //
 // Constructs the character/scenario data payloads sent to
 // POST /api/sessions/{id}/init.  Handles single-character,
@@ -17,7 +17,7 @@ import {
     EXTENSION_NAME, CHAR_CONFIG_EXT_KEY,
     buildPromptSettingsPayload,
 } from './settings.js';
-import { getCharInitType, getCharInitNames } from './char-config.js';
+import { getCharInitType, getCharInitNames, getCharTrackedFieldAdditions, getTrackedFieldAdditionsForChar } from './char-config.js';
 import { getPersonaPromptOverrides, getPersonaTrackedFieldAdditions } from './persona-config.js';
 import { getTrackedFieldsForPayload } from './tracked-fields.js';
 import { getFreshContext } from './groups.js';
@@ -184,11 +184,12 @@ function buildGroupMemberPayload(charObj, firstMes) {
     }
 
     // --- Per-character tracked_field_additions and prompt_settings_override ---
+    const charTFAdditions = getTrackedFieldAdditionsForChar(charObj);
+    if (charTFAdditions) {
+        member.tracked_field_additions = charTFAdditions;
+    }
     const extData = charObj?.data?.extensions?.[CHAR_CONFIG_EXT_KEY];
     if (extData) {
-        if (Array.isArray(extData.tracked_field_additions) && extData.tracked_field_additions.length > 0) {
-            member.tracked_field_additions = extData.tracked_field_additions;
-        }
         if (extData.prompt_settings_override && typeof extData.prompt_settings_override === 'object') {
             const overrides = { ...extData.prompt_settings_override };
             for (const [key, val] of Object.entries(overrides)) {
@@ -239,25 +240,39 @@ function applyPersonaOverrides(promptSettings, personaOverrides) {
 // #############################################
 
 /**
- * Build the _chat_info object for the init payload.
- * chat_id format: chatName-rawChatId (single) or groupName-rawChatId (group)
+ * Get the session identity components derived from the same logic as buildChatInfo().
+ * Returns { st_chat_id: rawChatId, name: chatNameOrGroupName }
+ * - Single-char: name = ctx.name2 (character name)
+ * - Group:       name = state.activeGroup.name (group name)
+ * - st_chat_id is always the raw ST chat ID (without prefix)
  */
-function buildChatInfo() {
+export function getSessionIdentity() {
     const ctx = getFreshContext();
     const rawChatId = typeof ctx.getCurrentChatId === 'function'
         ? ctx.getCurrentChatId() || ''
         : '';
 
-    let chatNamePrefix = '';
+    let name = '';
     if (state.isGroupChat && state.activeGroup) {
-        chatNamePrefix = state.activeGroup.name || '';
+        name = state.activeGroup.name || '';
     } else {
-        chatNamePrefix = ctx.name2 || '';
+        name = ctx.name2 || '';
     }
 
-    const chatId = chatNamePrefix && rawChatId
-        ? `${chatNamePrefix}-${rawChatId}`
-        : rawChatId || chatNamePrefix;
+    return { st_chat_id: rawChatId, name };
+}
+
+/**
+ * Build the _chat_info object for the init payload.
+ * chat_id format: chatName-rawChatId (single) or groupName-rawChatId (group)
+ * Uses the same getSessionIdentity() to ensure consistency.
+ */
+function buildChatInfo() {
+    const { st_chat_id, name } = getSessionIdentity();
+
+    const chatId = name && st_chat_id
+        ? `${name}-${st_chat_id}`
+        : st_chat_id || name;
 
     return {
         chat_id: chatId,
@@ -342,6 +357,12 @@ function buildSingleCharInitPayload() {
         if (hasContent) {
             payload.tracked_fields = JSON.parse(JSON.stringify(trackedFields));
         }
+    }
+
+    // Per-character tracked_field_additions
+    const charTFAdditions = getCharTrackedFieldAdditions();
+    if (charTFAdditions) {
+        payload.tracked_field_additions = charTFAdditions;
     }
 
     // Global prompt_settings (merged with per-character + persona overrides)

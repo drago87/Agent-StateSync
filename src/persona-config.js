@@ -13,7 +13,7 @@
 //   Payload format: { character: {...}, scenario: {...}, shared: {...} }
 //   Empty categories are excluded from payload.
 //
-// File Version: 3.0.0
+// File Version: 3.1.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';
@@ -217,8 +217,9 @@ function injectPersonaCSS() {
             background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
             border: 1px solid rgba(128, 128, 128, 0.3);
             border-radius: 10px;
-            width: 480px;
-            max-width: 90vw;
+            min-width: 1000px !important;
+            width: 1000px !important;
+            max-width: 95vw;
             max-height: 85vh;
             overflow-y: auto;
             padding: 20px;
@@ -323,9 +324,16 @@ function openPersonaConfigPanel() {
                 </div>
                 ${renderTFAdditions(config.tracked_field_additions, { allowSecret: true })}
                 <div class="ass-brain-info">
-                    Add persona-specific fields to track in the state database.<br>
-                    These are merged with the global tracked fields when sending to the Agent.<br>
-                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters in group chat.
+                    Add persona-specific fields to track in the state database.
+                    These are merged with the global tracked fields when sending to the Agent.
+                    <br>
+                    <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters (Character category only).
+                    <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> = Required — must be provided.
+                    <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> = Immutable — will only be written during initialization.
+                    <i class="fa-solid fa-maximize" style="color:#3498db;"></i> = Extend — only extends, will not overwrite.
+                    <i class="fa-solid fa-shuffle" style="color:#27ae60;"></i> = Dynamic — entries keyed by name (click for options).
+                    <br>
+                    <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
                 </div>
             </div>
 
@@ -398,8 +406,11 @@ export function getPersonaType() {
  * Returns null if no additions exist in any category.
  */
 export function getPersonaTrackedFieldAdditions() {
+    const avatar = getCurrentPersonaAvatar();
     const config = readPersonaConfig();
-    return tfAdditionsCategorizedToPayload(config.tracked_field_additions);
+    const result = tfAdditionsCategorizedToPayload(config.tracked_field_additions);
+    console.log(`[${EXTENSION_NAME}] getPersonaTrackedFieldAdditions: avatar="${avatar}", additions=${JSON.stringify(config.tracked_field_additions)}, result=${result ? JSON.stringify(result) : 'null'}`);
+    return result;
 }
 
 // #############################################
