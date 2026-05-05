@@ -76,8 +76,11 @@ function findCharIdByAvatar() {
         const url = new URL(avatarImg.src);
         const file = url.searchParams.get('file');
         if (!file) return null;
-        if (!state.context.characters) return null;
-        for (const [id, char] of Object.entries(state.context.characters)) {
+        // Use fresh context — state.context.characters may be stale
+        const ctx = getFreshContext();
+        const chars = ctx.characters || state.context.characters;
+        if (!chars) return null;
+        for (const [id, char] of Object.entries(chars)) {
             if (char.avatar === file) return id;
         }
     } catch (e) {

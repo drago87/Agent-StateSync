@@ -8,9 +8,15 @@
 //   - Single-char: chatName-rawChatId
 //   - Group:       groupName-rawChatId
 //
+// IMPORTANT: SillyTavern's getContext() does NOT include character card
+// fields (description, personality, scenario, mes_example) as top-level
+// properties.  These must be accessed via ctx.characters[ctx.characterId].
+// Always use the resolved character object for buildCardData(), never the
+// raw context object.
+//
 // Extracted from session.js to keep the payload builder
 // separate from the session lifecycle management.
-// File Version: 1.1.0
+// File Version: 1.2.0
 
 import state from './state.js';
 import {
@@ -31,12 +37,21 @@ import { getFreshContext } from './groups.js';
  * Uses the first message from the chat (not the card's first_mes field).
  * Excludes empty fields.
  *
- * @param {object} charData - Character object (from context.characters[] or context itself)
+ * IMPORTANT: charData MUST be a character object from context.characters[],
+ * NOT the raw context object.  SillyTavern's getContext() does not include
+ * description, personality, scenario, or mes_example as top-level properties.
+ *
+ * @param {object} charData - Character object from context.characters[]
  * @param {string|null} firstMesOverride - Override first_mes (from chat messages)
  * @returns {object} Clean data object with only non-empty fields
  */
 function buildCardData(charData, firstMesOverride) {
     const data = {};
+
+    if (!charData || typeof charData !== 'object') {
+        console.warn(`[${EXTENSION_NAME}] buildCardData: charData is missing or invalid`);
+        return data;
+    }
 
     const desc = charData.description || '';
     if (desc) data.description = desc;
@@ -291,9 +306,12 @@ function buildChatInfo() {
  * - Empty field exclusion
  * - first_mes from chat messages
  *
- * @returns {object} The complete init payload
+ * This function is async because it may need to unshallow character
+ * data (load full card from server) when building a single-char payload.
+ *
+ * @returns {Promise<object>} The complete init payload
  */
-export function buildInitPayload() {
+export async function buildInitPayload() {
     if (state.isGroupChat && state.activeGroupCharacters.length > 0) {
         return buildGroupInitPayload();
     }
@@ -305,15 +323,67 @@ export function buildInitPayload() {
 // #############################################
 
 /**
- * Build init payload for a single character (non-group) chat.
+ * Resolve the active character object from the fresh context.
+ * SillyTavern's getContext() does NOT include card fields (description,
+ * personality, scenario, mes_example) as top-level properties — they
+ * live inside ctx.characters[ctx.characterId].
+ *
+ * If the character data appears shallow (missing description AND personality),
+ * attempts to unshallow it via ctx.unshallowCharacter().
+ *
+ * @param {object} ctx - Fresh context from getFreshContext()
+ * @returns {object|null} The character object, or null if not found
  */
-function buildSingleCharInitPayload() {
+async function resolveActiveCharacter(ctx) {
+    const charId = ctx.characterId;
+    if (charId == null) {
+        console.warn(`[${EXTENSION_NAME}] resolveActiveCharacter: characterId is null`);
+        return null;
+    }
+
+    const charObj = ctx.characters?.[charId];
+    if (!charObj) {
+        console.warn(`[${EXTENSION_NAME}] resolveActiveCharacter: no character at index ${charId}`);
+        return null;
+    }
+
+    // Check if the character data is shallow (only basic fields loaded).
+    // A shallow character won't have description or personality — try to
+    // load the full data on demand.
+    if (charObj.shallow && typeof ctx.unshallowCharacter === 'function') {
+        console.log(`[${EXTENSION_NAME}] resolveActiveCharacter: unshallowing character at index ${charId}`);
+        try {
+            await ctx.unshallowCharacter(charId);
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] resolveActiveCharacter: unshallowCharacter failed:`, e.message);
+        }
+    }
+
+    return charObj;
+}
+
+/**
+ * Build init payload for a single character (non-group) chat.
+ *
+ * IMPORTANT: Reads character card data from ctx.characters[ctx.characterId]
+ * instead of from the context top-level.  SillyTavern's getContext() does
+ * NOT include description, personality, scenario, mes_example as top-level
+ * properties — those fields live on the character objects in the characters[]
+ * array.
+ */
+async function buildSingleCharInitPayload() {
     const cardType = getCharInitType();      // 'character' | 'multi-character' | 'scenario'
     const cardNames = getCharInitNames();   // [] for character/scenario, ['Alice','Bob'] for multi
     const ctx = getFreshContext();
     const cardName = ctx.name2 || '';
     const firstMes = getFirstMesFromChat(null);
-    const cardData = buildCardData(ctx, firstMes);
+
+    // --- Resolve the active character object ---
+    // Use ctx.characters[ctx.characterId] instead of ctx directly.
+    // The context object does NOT have description/personality/scenario/
+    // mes_example as top-level properties.
+    const charObj = await resolveActiveCharacter(ctx);
+    const cardData = buildCardData(charObj || {}, firstMes);
     const persona = buildPersona();
 
     const payload = {
@@ -366,8 +436,9 @@ function buildSingleCharInitPayload() {
     }
 
     // Global prompt_settings (merged with per-character + persona overrides)
-    const charConfig = ctx.characters?.[ctx.characterFilter]
-        ?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]
+    // NOTE: ctx.characterFilter does not exist in the ST API — use ctx.characterId
+    const charConfig = charObj?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]
+        || ctx.characters?.[ctx.characterId]?.data?.extensions?.[CHAR_CONFIG_EXT_KEY]
         || ctx.chatMetadata?.[CHAR_CONFIG_EXT_KEY]
         || null;
     const charOverrides = charConfig?.prompt_settings_override || null;

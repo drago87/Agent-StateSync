@@ -6,6 +6,7 @@
 import { EXTENSION_NAME } from './settings.js';
 import state from './state.js';
 import { buildInitPayload } from './init-payload.js';
+import { loadGroupData } from './groups.js';
 
 // #############################################
 // # Helpers
@@ -77,10 +78,25 @@ function showPayloadPopup(title, payload) {
 // # Commands
 // #############################################
 
-/** /ass-init — Preview the init payload with chat info */
-function cmdAssInit(args, text) {
+/** /ass-init — Preview the init payload with chat info
+ *
+ * Always reloads group data before building the payload to ensure
+ * the correct character/group is used, even if the proactive setup
+ * was missed or used stale data.  This matches the behavior of the
+ * rocket button (manualInitSession).
+ */
+async function cmdAssInit(args, text) {
     try {
-        const payload = buildInitPayload();
+        // --- Always reload group data to ensure correct character/group ---
+        // Without this, switching characters without F5 leaves stale
+        // state.isGroupChat / state.activeGroup / state.activeGroupCharacters.
+        try {
+            await loadGroupData();
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] /ass-init: group data reload failed (single-char fallback):`, e.message);
+        }
+
+        const payload = await buildInitPayload();
 
         // _chat_info is now built by buildInitPayload() with the correct
         // chat_id format (chatName-chatId or groupName-chatId).

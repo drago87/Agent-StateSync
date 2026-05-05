@@ -65,16 +65,19 @@ export async function proactiveChatChanged() {
         // Step 1: Get the chat ID first (with retries if needed).
         updateStatus('Loading chat data...', '#5bc0de');
 
-        const chatId = typeof state.context.getCurrentChatId === 'function'
-            ? state.context.getCurrentChatId()
-            : null;
+        const chatId = typeof getFreshContext().getCurrentChatId === 'function'
+            ? getFreshContext().getCurrentChatId()
+            : (typeof state.context.getCurrentChatId === 'function'
+                ? state.context.getCurrentChatId()
+                : null);
 
         if (!chatId) {
             console.log(`[${EXTENSION_NAME}] No chat ID yet, retrying...`);
             for (let attempt = 1; attempt <= 3; attempt++) {
                 await new Promise(r => setTimeout(r, 1000));
-                const retryId = typeof state.context.getCurrentChatId === 'function'
-                    ? state.context.getCurrentChatId()
+                const retryCtx = getFreshContext();
+                const retryId = typeof retryCtx.getCurrentChatId === 'function'
+                    ? retryCtx.getCurrentChatId()
                     : null;
                 if (retryId) {
                     console.log(`[${EXTENSION_NAME}] Got chat ID on retry ${attempt}: ${retryId}`);
@@ -136,7 +139,11 @@ async function proactiveChatChangedWithId(origin, chatId) {
         }
 
         // Step 2: Check if local metadata already has a session for this chat
-        const existingSessionId = state.context.chatMetadata?.[META_KEY_SESSION];
+        // Use getFreshContext() to get the CURRENT chatMetadata — state.context.chatMetadata
+        // may point to a previous chat's metadata after a character switch.
+        const freshCtx = getFreshContext();
+        const existingSessionId = freshCtx.chatMetadata?.[META_KEY_SESSION]
+            || state.context.chatMetadata?.[META_KEY_SESSION];
 
         // Step 3: Ask the Agent if it has a session for this ST chat ID
         let agentSessionId = null;
@@ -198,10 +205,14 @@ async function attachToExistingSession(origin, sessionId) {
 
     try {
         // Update local metadata to point to this session
-        state.context.chatMetadata = state.context.chatMetadata || {};
-        state.context.chatMetadata[META_KEY_SESSION] = sessionId;
-        state.context.chatMetadata[META_KEY_INITIALIZED] = false;
-        await state.context.saveMetadata();
+        // Use getFreshContext() to get CURRENT chatMetadata — state.context.chatMetadata
+        // may be stale after a character switch.
+        const attachCtx = getFreshContext();
+        const attachMeta = attachCtx.chatMetadata || state.context.chatMetadata || {};
+        attachMeta[META_KEY_SESSION] = sessionId;
+        attachMeta[META_KEY_INITIALIZED] = false;
+        state.context.chatMetadata = attachMeta;  // keep stale ref in sync
+        await (attachCtx.saveMetadata || state.context.saveMetadata)();
 
         // Re-initialize with current character/group data
         await initSession(origin, sessionId);
@@ -321,11 +332,13 @@ async function createAndInitSession(origin, stChatId, chatName) {
             console.log(`[${EXTENSION_NAME}] LLM config received from session creation response.`);
         }
 
-        // Save to metadata
-        state.context.chatMetadata = state.context.chatMetadata || {};
-        state.context.chatMetadata[META_KEY_SESSION] = sessionId;
-        state.context.chatMetadata[META_KEY_COUNTER] = 0;
-        await state.context.saveMetadata();
+        // Save to metadata — use fresh context to get CURRENT chatMetadata
+        const createCtx = getFreshContext();
+        const createMeta = createCtx.chatMetadata || state.context.chatMetadata || {};
+        createMeta[META_KEY_SESSION] = sessionId;
+        createMeta[META_KEY_COUNTER] = 0;
+        state.context.chatMetadata = createMeta;  // keep stale ref in sync
+        await (createCtx.saveMetadata || state.context.saveMetadata)();
 
         // Initialize with character/group data
         await initSession(origin, sessionId);
@@ -375,11 +388,15 @@ export async function ensureSession(backendOrigin) {
     }
 
     // --- Check if session already exists in metadata ---
-    if (state.context.chatMetadata && state.context.chatMetadata[META_KEY_SESSION]) {
-        if (!state.context.chatMetadata[META_KEY_INITIALIZED]) {
-            await initSession(backendOrigin, state.context.chatMetadata[META_KEY_SESSION]);
+    // Use getFreshContext() to get CURRENT chatMetadata — state.context.chatMetadata
+    // may be stale after a character switch.
+    const freshCtx = getFreshContext();
+    const currentMeta = freshCtx.chatMetadata || state.context.chatMetadata;
+    if (currentMeta && currentMeta[META_KEY_SESSION]) {
+        if (!currentMeta[META_KEY_INITIALIZED]) {
+            await initSession(backendOrigin, currentMeta[META_KEY_SESSION]);
         }
-        return state.context.chatMetadata[META_KEY_SESSION];
+        return currentMeta[META_KEY_SESSION];
     }
 
     // --- Create new session (fallback - proactive should handle this) ---
@@ -406,10 +423,13 @@ export async function ensureSession(backendOrigin) {
             storeLlmConfig(data);
         }
 
-        state.context.chatMetadata = state.context.chatMetadata || {};
-        state.context.chatMetadata[META_KEY_SESSION] = sessionId;
-        state.context.chatMetadata[META_KEY_COUNTER] = 0;
-        await state.context.saveMetadata();
+        // Save to metadata — use fresh context to get CURRENT chatMetadata
+        const fallbackCtx = getFreshContext();
+        const fallbackMeta = fallbackCtx.chatMetadata || state.context.chatMetadata || {};
+        fallbackMeta[META_KEY_SESSION] = sessionId;
+        fallbackMeta[META_KEY_COUNTER] = 0;
+        state.context.chatMetadata = fallbackMeta;  // keep stale ref in sync
+        await (fallbackCtx.saveMetadata || state.context.saveMetadata)();
 
         await initSession(backendOrigin, sessionId);
 
@@ -541,7 +561,8 @@ export async function initSession(backendOrigin, sessionId) {
     updateStatus('Initializing session...', '#f0ad4e');
 
     // Build the payload (needed for both bypass and real mode)
-    const initPayload = buildInitPayload();
+    // buildInitPayload() is async because it may need to unshallow character data
+    const initPayload = await buildInitPayload();
 
     // --- BYPASS MODE: log what we would have sent, don't actually call Agent ---
     if (isBypassMode()) {
@@ -560,8 +581,11 @@ export async function initSession(backendOrigin, sessionId) {
 
         if (resp.ok) {
             console.log(`[${EXTENSION_NAME}] Session ${sessionId} initialized with character data.`);
-            state.context.chatMetadata[META_KEY_INITIALIZED] = true;
-            await state.context.saveMetadata();
+            // Use fresh context for chatMetadata — state.context.chatMetadata may be stale
+            const initCtx = getFreshContext();
+            const initMeta = initCtx.chatMetadata || state.context.chatMetadata;
+            if (initMeta) initMeta[META_KEY_INITIALIZED] = true;
+            await (initCtx.saveMetadata || state.context.saveMetadata)();
             updateStatus('Session initialized', '#5cb85c');
         } else {
             console.warn(`[${EXTENSION_NAME}] Session init returned ${resp.status}. Will retry on next request.`);

@@ -378,7 +378,7 @@ export async function executeDebugCommand(command) {
                 add('');
 
                 // Build the actual payload using the same logic as initSession()
-                const payload = buildInitPayload();
+                const payload = await buildInitPayload();
 
                 // Pretty-print with truncation for display
                 const displayPayload = JSON.parse(JSON.stringify(payload, (key, value) => {
