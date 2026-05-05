@@ -3,7 +3,7 @@
 // The main interception pipeline: message type detection, history trimming,
 // [SYSTEM_META] tag construction, dummy bypass responses, and the
 // fetch interceptor that ties everything together.
-// File Version: 1.0.0
+// File Version: 1.0.1
 
 import state from './state.js';
 import {
@@ -229,12 +229,12 @@ export function interceptFetch() {
             }
 
             // --- Load group data if not cached yet (lazy load on first request) ---
-            if (state.cachedGroups === null) {
-                try {
-                    await loadGroupData();
-                } catch (e) {
-                    console.warn(`[${EXTENSION_NAME}] Group data load failed (continuing in single-char mode):`, e.message);
-                }
+            // Always reload to ensure correct chat mode after chat switches,
+            // since proactive setup may have missed or used stale data.
+            try {
+                await loadGroupData();
+            } catch (e) {
+                console.warn(`[${EXTENSION_NAME}] Group data load failed (continuing in single-char mode):`, e.message);
             }
 
             // --- Ensure session exists (fallback if proactive didn't run) ---

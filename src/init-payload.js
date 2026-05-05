@@ -4,9 +4,13 @@
 // POST /api/sessions/{id}/init.  Handles single-character,
 // multi-character, scenario, and group chat formats.
 //
+// Includes _chat_info with chat_id format:
+//   - Single-char: chatName-rawChatId
+//   - Group:       groupName-rawChatId
+//
 // Extracted from session.js to keep the payload builder
 // separate from the session lifecycle management.
-// File Version: 1.0.0
+// File Version: 1.1.0
 
 import state from './state.js';
 import {
@@ -235,6 +239,33 @@ function applyPersonaOverrides(promptSettings, personaOverrides) {
 // #############################################
 
 /**
+ * Build the _chat_info object for the init payload.
+ * chat_id format: chatName-rawChatId (single) or groupName-rawChatId (group)
+ */
+function buildChatInfo() {
+    const ctx = getFreshContext();
+    const rawChatId = typeof ctx.getCurrentChatId === 'function'
+        ? ctx.getCurrentChatId() || ''
+        : '';
+
+    let chatNamePrefix = '';
+    if (state.isGroupChat && state.activeGroup) {
+        chatNamePrefix = state.activeGroup.name || '';
+    } else {
+        chatNamePrefix = ctx.name2 || '';
+    }
+
+    const chatId = chatNamePrefix && rawChatId
+        ? `${chatNamePrefix}-${rawChatId}`
+        : rawChatId || chatNamePrefix;
+
+    return {
+        chat_id: chatId,
+        mode: state.isGroupChat ? 'group' : 'single-character',
+    };
+}
+
+/**
  * Build the full init payload for POST /api/sessions/{id}/init
  * according to the v3.0 spec.
  *
@@ -275,6 +306,7 @@ function buildSingleCharInitPayload() {
         is_multi_character: cardType === 'multi-character',
         is_scenario: cardType === 'scenario',
         card_name: cardName,
+        _chat_info: buildChatInfo(),
     };
         // Chat name (character card name)
         const chatName = ctx.name2 || '';
@@ -393,6 +425,7 @@ function buildGroupInitPayload() {
         is_group: true,
         group_name: state.activeGroup.name,
         group_members: memberPayloads,
+        _chat_info: buildChatInfo(),
     };
 
         // Chat name (group name) — use activeGroup directly, not stale context

@@ -11,6 +11,7 @@
 //   - Group chat: members ordered by first message in chat
 //   - group_scenario logic: include at top or per-member
 //   - Empty fields excluded from payload
+//   - _chat_info with chatName-/groupName-prefixed chat_id
 //
 // Health guards (manual init):
 //   - RP LLM status is ignored for init (only matters for message generation)
@@ -18,7 +19,7 @@
 //   - If some Instruct backends are unhealthy but at least one is Healthy,
 //     init proceeds with a warning (may go slower)
 //   - If NO Instruct backends are Healthy, init is blocked with an error
-// File Version: 1.7.0
+// File Version: 1.8.0
 
 import state from './state.js';
 import {
@@ -357,6 +358,8 @@ export async function ensureSession(backendOrigin) {
     }
 
     // --- Ensure group data is loaded before doing anything ---
+    // (manualInitSession and pipeline already call loadGroupData(),
+    //  so this is just a safety net for edge cases)
     if (!state.cachedGroups && !state.isGroupChat) {
         try {
             console.log(`[${EXTENSION_NAME}] ensureSession: loading group data (proactive may have missed it)`);
@@ -415,8 +418,12 @@ export async function ensureSession(backendOrigin) {
 }
 
 /**
- * Manual init — called when user clicks the Init button (rocket).
+ * Manual init — called when user clicks the Init button (rocket) or runs /ass-init.
  * Creates a session if needed, initializes it, and starts polling.
+ *
+ * ALWAYS reloads group data before building the payload to ensure
+ * the correct character/group is used, even if the proactive setup
+ * was missed or used stale data.
  *
  * Health guards:
  *   - RP LLM status is ignored (only relevant for message generation, not init).
@@ -431,6 +438,15 @@ export async function manualInitSession() {
     if (!origin) {
         toastr.error('No Agent URL detected. Set Custom Endpoint in ST.', 'Agent-StateSync');
         return false;
+    }
+
+    // --- Always reload group data to ensure correct character/group ---
+    // The proactive setup may have used stale data or been missed entirely.
+    // This ensures /ass-init always gets the right chat mode.
+    try {
+        await loadGroupData();
+    } catch (e) {
+        console.warn(`[${EXTENSION_NAME}] Group data reload failed (single-char fallback):`, e.message);
     }
 
     // --- Check Instruct backend health (required for init) ---
