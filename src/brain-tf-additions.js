@@ -717,7 +717,7 @@ function openImportModal(panelSelector) {
 
     const html = `
     <div id="ass-btf-import-overlay" class="ass-tf-overlay">
-        <div class="ass-tf-modal" style="width:550px;">
+        <div class="ass-tf-modal" style="width:1000px; max-width:95vw;">
             <div class="ass-tf-modal-header">
                 <h3><i class="fa-solid fa-file-import"></i> Import from Database Tracked Fields</h3>
                 <button id="ass-btf-import-close" class="ass-tf-modal-close" type="button">&times;</button>

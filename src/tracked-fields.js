@@ -25,7 +25,7 @@
 // panel) so that the field rows have enough horizontal space for
 // all the inputs, icons, and buttons.
 //
-// File Version: 4.0.0
+// File Version: 4.1.0
 
 import state from './state.js';
 
@@ -170,11 +170,51 @@ function scheduleSave() {
 }
 
 /**
+ * Recursively normalize is_dynamic values in a tracked fields payload dict.
+ * Converts: false/undefined → "False", true → "True", strings kept as-is.
+ * Ensures is_dynamic is always a string in the payload output.
+ */
+function normalizeIsDynamic(fields) {
+    if (!fields || typeof fields !== 'object') return fields;
+    const result = {};
+    for (const [key, val] of Object.entries(fields)) {
+        if (!val || typeof val !== 'object') { result[key] = val; continue; }
+
+        const entry = { ...val };
+        if (entry.fields !== undefined) {
+            // Group field
+            entry.is_dynamic = !entry.is_dynamic || entry.is_dynamic === false
+                ? 'False'
+                : entry.is_dynamic === true
+                    ? 'True'
+                    : String(entry.is_dynamic);
+            entry.fields = normalizeIsDynamic(entry.fields);
+        } else {
+            // Simple field — include is_dynamic as string only when non-default
+            if (entry.is_dynamic !== undefined && entry.is_dynamic !== false) {
+                entry.is_dynamic = entry.is_dynamic === true ? 'True' : String(entry.is_dynamic);
+            } else {
+                delete entry.is_dynamic;
+            }
+        }
+        result[key] = entry;
+    }
+    return result;
+}
+
+/**
  * Get the current tracked fields for the init payload.
  * Called by session.js when building the POST body.
+ * is_dynamic values are normalized to strings.
  */
 export function getTrackedFieldsForPayload() {
-    return currentFields;
+    if (!currentFields) return null;
+    const result = {};
+    for (const cat of ['character', 'scenario', 'shared']) {
+        if (!currentFields[cat] || Object.keys(currentFields[cat]).length === 0) continue;
+        result[cat] = normalizeIsDynamic(currentFields[cat]);
+    }
+    return Object.keys(result).length > 0 ? result : null;
 }
 
 // #############################################
@@ -1075,7 +1115,7 @@ function injectCSS() {
         background: var(--SmartThemeBlurTintColor, rgba(25, 25, 35, 0.97));
         border: 1px solid rgba(128, 128, 128, 0.3);
         border-radius: 10px;
-        width: 820px;
+        width: 1000px;
         max-width: 95vw;
         max-height: 85vh;
         overflow-y: auto;
