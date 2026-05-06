@@ -385,17 +385,20 @@ async function buildSingleCharInitPayload() {
     const charObj = await resolveActiveCharacter(ctx);
     const cardData = buildCardData(charObj || {}, firstMes);
     const persona = buildPersona();
+    const chatName = ctx.name2 || '';
 
+    // --- Build payload with _chat_info, chat_name, persona at the top ---
     const payload = {
-        is_group: false,
-        is_multi_character: cardType === 'multi-character',
-        is_scenario: cardType === 'scenario',
-        card_name: cardName,
         _chat_info: buildChatInfo(),
     };
-        // Chat name (character card name)
-        const chatName = ctx.name2 || '';
-        if (chatName) payload.chat_name = chatName;
+    if (chatName) payload.chat_name = chatName;
+    if (persona) payload.persona = persona;
+
+    // Card classification flags
+    payload.is_group = false;
+    payload.is_multi_character = cardType === 'multi-character';
+    payload.is_scenario = cardType === 'scenario';
+    payload.card_name = cardName;
 
     // For multi-character, include character_names
     if (cardType === 'multi-character' && cardNames.length > 0) {
@@ -411,11 +414,6 @@ async function buildSingleCharInitPayload() {
         payload.scenario = cardData;
     } else {
         payload.character = cardData;
-    }
-
-    // Persona
-    if (persona) {
-        payload.persona = persona;
     }
 
     // Global tracked_fields definition (from STe settings)
@@ -512,27 +510,24 @@ function buildGroupInitPayload() {
         return member;
     });
 
-    // --- Build final payload ---
+    // --- Build final payload with _chat_info, chat_name, persona at the top ---
+    const chatName = state.activeGroup?.name || '';
+    const persona = buildPersona();
+
     const payload = {
-        is_group: true,
-        group_name: state.activeGroup.name,
-        group_members: memberPayloads,
         _chat_info: buildChatInfo(),
     };
+    if (chatName) payload.chat_name = chatName;
+    if (persona) payload.persona = persona;
 
-        // Chat name (group name) — use activeGroup directly, not stale context
-        const chatName = state.activeGroup?.name || '';
-        if (chatName) payload.chat_name = chatName;
+    // Group classification and data
+    payload.is_group = true;
+    payload.group_name = state.activeGroup.name;
+    payload.group_members = memberPayloads;
 
     // group_scenario: include only if non-empty
     if (groupScenario) {
         payload.group_scenario = groupScenario;
-    }
-
-    // Persona (top-level only for groups)
-    const persona = buildPersona();
-    if (persona) {
-        payload.persona = persona;
     }
 
     // Global tracked_fields definition (from STe settings)
