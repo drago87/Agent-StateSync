@@ -1,4 +1,5 @@
 // tf-modal.js — Agent-StateSync Tracked Fields: Modal Panel & Edit Handlers
+// File Version: 1.1.0
 //
 // Contains: Modal panel (openTFModal, renderModalCategories, closeTFModal,
 //   updateTFButton), edit handlers (addField, addGroupField, saveAsDefault,
@@ -396,13 +397,18 @@ function bindModalEvents() {
     });
 
     // Input changes — live sync + save
-    // Name changes also update data-key attributes so action buttons stay in sync
+    // Name changes also update data-key attributes so action buttons stay in sync.
+    // Only update data-key when the new name is non-empty — this preserves the
+    // original key as a fallback so the field isn't lost if the user momentarily
+    // clears the input (e.g. to retype a new name).
     $modal.on('input.ass-tf', '.ass-tf-name', function () {
         const newName = ($(this).val() || '').trim();
         const $field = $(this).closest('.ass-tf-field');
-        $field.attr('data-key', newName);
-        // Update action buttons inside this field that reference data-key
-        $field.find('> .ass-tf-group-actions .ass-tf-add-subfield, > .ass-tf-group-actions .ass-tf-add-subgroup').attr('data-key', newName);
+        if (newName) {
+            $field.attr('data-key', newName);
+            // Update action buttons inside this field that reference data-key
+            $field.find('> .ass-tf-group-actions .ass-tf-add-subfield, > .ass-tf-group-actions .ass-tf-add-subgroup').attr('data-key', newName);
+        }
         syncFieldsFromDOM();
         scheduleSave();
     });

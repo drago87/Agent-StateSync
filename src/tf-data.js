@@ -1,4 +1,5 @@
 // tf-data.js — Agent-StateSync Tracked Fields: Shared State & Data Layer
+// File Version: 1.1.0
 //
 // Contains: Module-level state (currentFields, openCategories, saveTimeout,
 //   defaultFieldsCache), settings keys, default fields loading from JSON,
@@ -210,13 +211,22 @@ export function normalizeIsDynamic(fields) {
             } else {
                 delete entry.is_dynamic;
             }
+            // Exclude extends_only when false or undefined (default)
+            if (!entry.extends_only) {
+                delete entry.extends_only;
+            }
             entry.fields = normalizeIsDynamic(entry.fields);
         } else {
             // Simple field — include is_dynamic as string only when non-default
-            if (entry.is_dynamic !== undefined && entry.is_dynamic !== false) {
+            // Exclude is_dynamic when undefined, false, or the string "False"
+            if (entry.is_dynamic !== undefined && entry.is_dynamic !== false && entry.is_dynamic !== 'False') {
                 entry.is_dynamic = entry.is_dynamic === true ? 'True' : String(entry.is_dynamic);
             } else {
                 delete entry.is_dynamic;
+            }
+            // Exclude extends_only when false or undefined (default)
+            if (!entry.extends_only) {
+                delete entry.extends_only;
             }
         }
         result[key] = entry;

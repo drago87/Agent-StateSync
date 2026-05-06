@@ -1,4 +1,5 @@
 // brain-tf-additions.js — Agent-StateSync Tracked Field Additions Editor (Facade)
+// File Version: 1.0.0
 //
 // Thin facade that re-exports everything from the sub-modules so that
 // existing consumers can continue to import from this single file

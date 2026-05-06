@@ -1,4 +1,5 @@
 // listeners.js — Agent-StateSync Event Listeners
+// File Version: 1.1.0
 //
 // Registers one-time event listeners for SillyTavern events
 // (chat rename, etc.) and forwards relevant changes to the Agent backend.
@@ -11,7 +12,6 @@
 //
 // Response from Agent: {"rename": "ok"} or {"rename": "failed"}
 //
-// File Version: 1.1.0
 
 import state from './state.js';
 import { EXTENSION_NAME, META_KEY_SESSION } from './settings.js';

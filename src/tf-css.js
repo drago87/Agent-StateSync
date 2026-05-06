@@ -1,4 +1,5 @@
 // tf-css.js — Agent-StateSync Tracked Fields: CSS Injection
+// File Version: 1.0.0
 //
 // Contains the injectCSS function that injects the full tracked fields
 // editor stylesheet into the document head. Separated from logic for

@@ -1,4 +1,5 @@
 // btf-dom.js — Agent-StateSync Tracked Field Additions: DOM→Data Reading & Path Helpers
+// File Version: 1.0.0
 //
 // Contains functions that read current UI state from the DOM back into data
 // (for saving / re-rendering), plus path helpers that navigate and mutate

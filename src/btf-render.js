@@ -1,4 +1,5 @@
 // btf-render.js — Agent-StateSync Tracked Field Additions: Rendering
+// File Version: 1.0.0
 //
 // Contains all HTML generation: helpers, icon toggles, dynamic popup,
 // category rendering, field rendering, and container re-render.

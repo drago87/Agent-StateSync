@@ -1,4 +1,5 @@
 // persona-config.js — Agent-StateSync Persona Config Panel
+// File Version: 3.1.0
 //
 // Brain button in the Persona controls button bar.
 // Opens a panel where the user can configure per-persona:
@@ -13,7 +14,6 @@
 //   Payload format: { character: {...}, scenario: {...}, shared: {...} }
 //   Empty categories are excluded from payload.
 //
-// File Version: 3.1.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';

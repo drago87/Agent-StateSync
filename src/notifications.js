@@ -1,4 +1,5 @@
 // notifications.js — Agent-StateSync Notification Polling
+// File Version: 1.0.1
 //
 // Polls the Agent's POST /api/ping endpoint for push notifications.
 // Notifications include events like session_deleted that keep the
@@ -8,7 +9,6 @@
 //   POST /api/ping  →  { status, notifications: [...] }
 //   POST /api/notifications/ack  →  acknowledges each processed notification
 //
-// File Version: 1.0.1
 
 import state from './state.js';
 import {

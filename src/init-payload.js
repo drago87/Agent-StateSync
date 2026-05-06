@@ -1,4 +1,5 @@
 // init-payload.js — Agent-StateSync Init Payload Builder (v3.1)
+// File Version: 1.2.0
 //
 // Constructs the character/scenario data payloads sent to
 // POST /api/sessions/{id}/init.  Handles single-character,
@@ -16,7 +17,6 @@
 //
 // Extracted from session.js to keep the payload builder
 // separate from the session lifecycle management.
-// File Version: 1.2.0
 
 import state from './state.js';
 import {

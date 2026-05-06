@@ -1,4 +1,5 @@
 // groups.js — Agent-StateSync Group Data Loading
+// File Version: 1.3.0
 //
 // Fetches group data from SillyTavern's server API, finds the active group
 // for the current chat, resolves member avatars to full Character objects,
@@ -11,7 +12,6 @@
 // Group detection uses context.groupId (camelCase) as the primary signal.
 // If groupId is null/undefined, falls back to chatId matching against
 // groups' chat_id and chats[] arrays (ST may not have updated groupId yet).
-// File Version: 1.3.0
 
 import state from './state.js';
 import { EXTENSION_NAME } from './settings.js';

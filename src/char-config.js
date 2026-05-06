@@ -1,4 +1,5 @@
 // char-config.js — Agent-StateSync Character Config Panel
+// File Version: 3.2.0
 //
 // Brain button in the Character Sheet Bar (star/skull row).
 // Opens a panel where the user defines how the Agent should parse
@@ -18,7 +19,6 @@
 //
 // Supports nested sub-fields and secret marking.
 //
-// File Version: 3.1.1
 
 import state from './state.js';
 import { EXTENSION_NAME, CHAR_CONFIG_EXT_KEY } from './settings.js';
@@ -137,8 +137,9 @@ function tfAdditionsArrayToObject(additions) {
             obj[name] = {
                 type: entry.type || 'string',
                 hint: entry.hint || '',
-                extends_only: entry.extends_only || false,
             };
+            // Only include extends_only when true (exclude false/default from payload)
+            if (entry.extends_only) obj[name].extends_only = true;
             // is_dynamic for simple fields: include as string when non-default
             const dynStr = isDynamicToString(entry.is_dynamic);
             if (dynStr !== 'False') {

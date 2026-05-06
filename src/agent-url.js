@@ -1,4 +1,5 @@
 // agent-url.js — Agent-StateSync URL Resolution & Health Checks
+// File Version: 2.2.1
 //
 // Auto-detects the Agent URL from SillyTavern's Custom Endpoint setting.
 // Manages health check pinging, LLM status display (sourced from Agent),
@@ -28,7 +29,6 @@
 //   - "unknown":   LLM enabled but not running / connection refused / timeout
 //   - "Unhealthy": HTTP error (e.g. 500) — server reachable but broken
 //   - "Disabled":  LLM disabled in Agent config
-// File Version: 2.2.1
 
 import state from './state.js';
 import {

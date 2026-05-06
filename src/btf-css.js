@@ -1,4 +1,5 @@
 // btf-css.js — Agent-StateSync Tracked Field Additions: CSS Injection
+// File Version: 1.0.0
 //
 // Contains the injectBtfCSS function that inserts the full stylesheet
 // for the TF additions editor into the document head.  Idempotent —

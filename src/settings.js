@@ -1,4 +1,5 @@
 // settings.js — Agent-StateSync Constants, Settings, and Utilities
+// File Version: 2.1.0
 //
 // All constant definitions, default settings, settings CRUD operations,
 // and small utility functions (hashing, status text, debug output).
@@ -6,7 +7,6 @@
 // LLM settings (URLs, templates, backends) are now managed by the Agent.
 // STe only sends non-LLM settings via POST /api/config.
 // LLM health and config are fetched from GET /api/backends/health.
-// File Version: 2.1.0
 
 import state from './state.js';
 import defaultConfig from './default-config.js';

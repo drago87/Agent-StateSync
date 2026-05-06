@@ -1,4 +1,5 @@
 // btf-import.js — Agent-StateSync Tracked Field Additions: Import from Database Tracked Fields
+// File Version: 1.0.0
 //
 // Contains the import modal UI and logic for pulling fields from the
 // Database Tracked Fields configuration into additions.

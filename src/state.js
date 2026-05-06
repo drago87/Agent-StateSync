@@ -1,9 +1,9 @@
 // state.js — Agent-StateSync Shared State
+// File Version: 1.2.0
 //
 // Single source of truth for all mutable state shared across modules.
 // All modules import this object and read/write its properties.
 // Since it's an object reference, mutations are visible everywhere.
-// File Version: 1.2.0
 
 const state = {
     // SillyTavern context (set once during init)

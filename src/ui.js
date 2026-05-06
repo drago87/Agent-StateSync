@@ -1,10 +1,10 @@
 // ui.js — Agent-StateSync UI Orchestrator & Initialization
+// File Version: 2.2.0
 //
 // Thin orchestrator that wires together the settings panel (ui-settings),
 // injected buttons (ui-buttons), chat event hooks, and the main init()
 // entry point.  Keeps the initialization flow in one place while
 // delegating rendering to focused modules.
-// File Version: 2.2.0
 
 import state from './state.js';
 import {

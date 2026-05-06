@@ -1,4 +1,5 @@
 // ui-settings.js — Agent-StateSync Settings Panel Rendering
+// File Version: 2.1.0
 //
 // Settings panel HTML/CSS, event bindings, and all change handlers.
 //
@@ -8,7 +9,6 @@
 //
 // alias values are shown as-is (user-friendly name or IP:port).
 // Health dots use Agent's values: "Healthy" | "unknown" | "Unhealthy" | "Disabled"
-// File Version: 2.1.0
 
 import state from './state.js';
 import {

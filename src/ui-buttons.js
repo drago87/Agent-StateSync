@@ -1,11 +1,11 @@
 // ui-buttons.js — Agent-StateSync Injected UI Buttons
+// File Version: 1.0.0
 //
 // Char Config button (action bar), Init Session button (rocket),
 // and visibility management for the init button.
 //
 // Extracted from ui.js to keep injected UI elements separate
 // from the settings panel and initialization orchestrator.
-// File Version: 1.0.0
 
 import state from './state.js';
 import {

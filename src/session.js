@@ -1,4 +1,5 @@
 // session.js — Agent-StateSync Session Lifecycle Management
+// File Version: 1.9.0
 //
 // Handles proactive chat-changed hook, session creation/attachment,
 // and initialization with character or group data.
@@ -19,7 +20,6 @@
 //   - If some Instruct backends are unhealthy but at least one is Healthy,
 //     init proceeds with a warning (may go slower)
 //   - If NO Instruct backends are Healthy, init is blocked with an error
-// File Version: 1.9.0
 
 import state from './state.js';
 import {

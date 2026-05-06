@@ -1,11 +1,11 @@
 // debug.js — Agent-StateSync Debug Command Handlers
+// File Version: 1.2.0
 //
 // Executes diagnostic commands and returns formatted output strings
 // for display in the debug panel textbox.
 //
 // IMPORTANT: Always uses getFreshContext() to get CURRENT values,
 // not the stale state.context snapshot from init time.
-// File Version: 1.2.0
 
 import state from './state.js';
 import {

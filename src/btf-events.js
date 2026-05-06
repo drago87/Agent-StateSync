@@ -1,4 +1,5 @@
 // btf-events.js — Agent-StateSync Tracked Field Additions: Event Binding
+// File Version: 1.0.0
 //
 // Contains the single bindTFAdditionEvents function that delegates all
 // user interactions on the TF additions panel.  Uses delegated handlers

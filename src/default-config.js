@@ -1,4 +1,5 @@
 // default-config.js — Agent-StateSync Default Configuration
+// File Version: 1.1.0
 //
 // Provides default values for prompt_settings and debug flag.
 // Tracked field defaults are loaded from external JSON files:
@@ -7,7 +8,6 @@
 //   - default-tracked-shared.json
 // These are loaded at runtime by tracked-fields.js via fetch().
 //
-// File Version: 1.1.0
 
 export default {
     "debug": false,

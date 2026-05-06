@@ -1,4 +1,5 @@
 // tf-render.js — Agent-StateSync Tracked Fields: Rendering & DOM Sync
+// File Version: 1.1.0
 //
 // Contains: HTML helpers (escapeAttr, buildTypeOptions), dynamic value helpers
 //   (normalizeDynamicValue, dynamicValueToStored), icon toggle rendering

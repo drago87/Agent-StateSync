@@ -1,8 +1,8 @@
 // index.js — Agent-StateSync Entry Point
+// File Version: 1.0.4
 //
 // Webpack entry. Imports and initializes the extension.
 // manifest.json points to dist/index.js (the built output).
-// File Version: 1.0.4
 
 import defaultConfig from './default-config.js';
 import { init } from './ui.js';

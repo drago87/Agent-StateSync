@@ -1,6 +1,5 @@
 // prompt-settings.js — Agent-StateSync Prompt Settings Editor
 // File Version: 1.0.2
-
 import state from './state.js';
 import {
     loadPromptSettings, savePromptSettings,
