@@ -1,5 +1,5 @@
-// btf-events.js — Agent-StateSync Tracked Field Additions: Event Binding
-// File Version: 1.0.0
+// btf-events.js
+// File Version: 1.1.0
 //
 // Contains the single bindTFAdditionEvents function that delegates all
 // user interactions on the TF additions panel.  Uses delegated handlers
@@ -130,7 +130,7 @@ export function bindTFAdditionEvents(panelSelector = '') {
     });
 
     // --- Icon toggle clicks (Secret, Required, Immutable, Extend) ---
-    $panel.on('click.ass-btf', '.ass-btf-icon-secret, .ass-btf-icon-required, .ass-btf-icon-immutable, .ass-btf-icon-extend', function (e) {
+    $panel.on('click.ass-btf', '.ass-btf-icon-secret, .ass-btf-icon-required, .ass-btf-icon-immutable, .ass-btf-icon-extend, .ass-btf-icon-important, .ass-btf-icon-number', function (e) {
         e.stopPropagation();
         const $btn = $(this);
         const isActive = $btn.attr('data-active') === 'true';

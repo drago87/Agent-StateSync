@@ -1,5 +1,5 @@
-// btf-dom.js — Agent-StateSync Tracked Field Additions: DOM→Data Reading & Path Helpers
-// File Version: 1.0.0
+// btf-dom.js
+// File Version: 1.1.0
 //
 // Contains functions that read current UI state from the DOM back into data
 // (for saving / re-rendering), plus path helpers that navigate and mutate
@@ -78,11 +78,15 @@ export function readAdditionFieldFromDOM($el) {
         const secret = readIconActive($row, '.ass-btf-icon-secret');
         const required = readIconActive($row, '.ass-btf-icon-required');
         const immutable = readIconActive($row, '.ass-btf-icon-immutable');
+        const isImportant = readIconActive($row, '.ass-btf-icon-important');
+        const isNumber = readIconActive($row, '.ass-btf-icon-number');
         if (isDynamic) result.is_dynamic = isDynamic;
         if (extendsOnly) result.extends_only = true;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (immutable) result.immutable = true;
+        if (isImportant) result.is_important = true;
+        if (isNumber) result.is_number = true;
 
         $el.children('.ass-btf-subfields').children('.ass-btf-field').each(function () {
             result.fields.push(readAdditionFieldFromDOM($(this)));
@@ -101,11 +105,15 @@ export function readAdditionFieldFromDOM($el) {
         const secret = readIconActive($row, '.ass-btf-icon-secret');
         const required = readIconActive($row, '.ass-btf-icon-required');
         const immutable = readIconActive($row, '.ass-btf-icon-immutable');
+        const isImportant = readIconActive($row, '.ass-btf-icon-important');
+        const isNumber = readIconActive($row, '.ass-btf-icon-number');
         if (extendsOnly) result.extends_only = true;
         if (isDynamic) result.is_dynamic = isDynamic;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (immutable) result.immutable = true;
+        if (isImportant) result.is_important = true;
+        if (isNumber) result.is_number = true;
 
         return result;
     }

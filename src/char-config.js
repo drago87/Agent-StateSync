@@ -1,5 +1,5 @@
-// char-config.js — Agent-StateSync Character Config Panel
-// File Version: 3.2.0
+// char-config.js
+// File Version: 3.3.0
 //
 // Brain button in the Character Sheet Bar (star/skull row).
 // Opens a panel where the user defines how the Agent should parse
@@ -133,6 +133,8 @@ function tfAdditionsArrayToObject(additions) {
                 obj[name].is_dynamic = dynStr;
             }
             if (entry.secret) obj[name].secret = true;
+            if (entry.is_important) obj[name].is_important = true;
+            if (entry.is_number) obj[name].is_number = true;
         } else {
             obj[name] = {
                 type: entry.type || 'string',
@@ -146,6 +148,8 @@ function tfAdditionsArrayToObject(additions) {
                 obj[name].is_dynamic = dynStr;
             }
             if (entry.secret) obj[name].secret = true;
+            if (entry.is_important) obj[name].is_important = true;
+            if (entry.is_number) obj[name].is_number = true;
         }
     }
     return Object.keys(obj).length > 0 ? obj : null;
@@ -694,6 +698,8 @@ function openCharConfigPanel() {
                         <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> = Immutable — will only be written during initialization.
                         <i class="fa-solid fa-maximize" style="color:#3498db;"></i> = Extend — only extends, will not overwrite.
                         <i class="fa-solid fa-shuffle" style="color:#27ae60;"></i> = Dynamic — entries keyed by name (click for options).
+                        <i class="fa-solid fa-star" style="color:#f1c40f;"></i> = Important — significant field for the Agent.
+                        <i class="fa-solid fa-hashtag" style="color:#1abc9c;"></i> = Number — numeric value, Agent can perform math.
                         <br>
                         <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
                     </div>

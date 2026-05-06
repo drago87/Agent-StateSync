@@ -1,5 +1,5 @@
-// btf-css.js — Agent-StateSync Tracked Field Additions: CSS Injection
-// File Version: 1.0.0
+// btf-css.js
+// File Version: 1.1.0
 //
 // Contains the injectBtfCSS function that inserts the full stylesheet
 // for the TF additions editor into the document head.  Idempotent —
@@ -125,6 +125,10 @@ export function injectBtfCSS() {
     .ass-btf-icon-extend.active { background: rgba(52, 152, 219, 0.15); border-color: rgba(52, 152, 219, 0.3); }
     .ass-btf-icon-dynamic { color: #27ae60; }
     .ass-btf-icon-dynamic.active { background: rgba(39, 174, 96, 0.15); border-color: rgba(39, 174, 96, 0.3); }
+    .ass-btf-icon-important { color: #f1c40f; }
+    .ass-btf-icon-important.active { background: rgba(241, 196, 15, 0.15); border-color: rgba(241, 196, 15, 0.3); }
+    .ass-btf-icon-number { color: #1abc9c; }
+    .ass-btf-icon-number.active { background: rgba(26, 188, 156, 0.15); border-color: rgba(26, 188, 156, 0.3); }
 
     /* Dynamic popup */
     .ass-btf-dyn-popup {

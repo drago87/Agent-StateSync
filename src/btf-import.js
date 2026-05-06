@@ -1,5 +1,5 @@
-// btf-import.js — Agent-StateSync Tracked Field Additions: Import from Database Tracked Fields
-// File Version: 1.0.0
+// btf-import.js
+// File Version: 1.1.0
 //
 // Contains the import modal UI and logic for pulling fields from the
 // Database Tracked Fields configuration into additions.
@@ -174,6 +174,8 @@ function trackedFieldToEntry(key, field) {
         if (field.secret) entry.secret = true;
         if (field.required) entry.required = true;
         if (field.immutable) entry.immutable = true;
+        if (field.is_important) entry.is_important = true;
+        if (field.is_number) entry.is_number = true;
         return entry;
     }
 
@@ -187,5 +189,7 @@ function trackedFieldToEntry(key, field) {
     if (field.secret) entry.secret = true;
     if (field.required) entry.required = true;
     if (field.immutable) entry.immutable = true;
+    if (field.is_important) entry.is_important = true;
+    if (field.is_number) entry.is_number = true;
     return entry;
 }

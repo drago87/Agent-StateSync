@@ -1,5 +1,5 @@
-// tf-data.js — Agent-StateSync Tracked Fields: Shared State & Data Layer
-// File Version: 1.1.0
+// tf-data.js
+// File Version: 1.2.0
 //
 // Contains: Module-level state (currentFields, openCategories, saveTimeout,
 //   defaultFieldsCache), settings keys, default fields loading from JSON,
@@ -188,9 +188,11 @@ export function scheduleSave() {
 }
 
 /**
- * Recursively normalize is_dynamic values in a tracked fields payload dict.
+ * Recursively normalize field values in a tracked fields payload dict.
  * Converts: false/undefined → "False", true → "True", strings kept as-is.
  * Ensures is_dynamic is always a string in the payload output.
+ * Excludes default-false values (is_dynamic: false, extends_only: false,
+ * is_important: false, is_number: false) to reduce payload size.
  */
 export function normalizeIsDynamic(fields) {
     if (!fields || typeof fields !== 'object') return fields;
@@ -215,6 +217,14 @@ export function normalizeIsDynamic(fields) {
             if (!entry.extends_only) {
                 delete entry.extends_only;
             }
+            // Exclude is_important when false or undefined (default)
+            if (!entry.is_important) {
+                delete entry.is_important;
+            }
+            // Exclude is_number when false or undefined (default)
+            if (!entry.is_number) {
+                delete entry.is_number;
+            }
             entry.fields = normalizeIsDynamic(entry.fields);
         } else {
             // Simple field — include is_dynamic as string only when non-default
@@ -227,6 +237,14 @@ export function normalizeIsDynamic(fields) {
             // Exclude extends_only when false or undefined (default)
             if (!entry.extends_only) {
                 delete entry.extends_only;
+            }
+            // Exclude is_important when false or undefined (default)
+            if (!entry.is_important) {
+                delete entry.is_important;
+            }
+            // Exclude is_number when false or undefined (default)
+            if (!entry.is_number) {
+                delete entry.is_number;
             }
         }
         result[key] = entry;

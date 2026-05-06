@@ -1,5 +1,5 @@
-// tf-modal.js — Agent-StateSync Tracked Fields: Modal Panel & Edit Handlers
-// File Version: 1.1.0
+// tf-modal.js
+// File Version: 1.2.0
 //
 // Contains: Modal panel (openTFModal, renderModalCategories, closeTFModal,
 //   updateTFButton), edit handlers (addField, addGroupField, saveAsDefault,
@@ -298,6 +298,8 @@ export function openTFModal() {
                     <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> = Immutable — will only be written during initialization.
                     <i class="fa-solid fa-maximize" style="color:#3498db;"></i> = Extend — only extends, will not overwrite.
                     <i class="fa-solid fa-shuffle" style="color:#27ae60;"></i> = Dynamic — entries keyed by name (click for options).
+                    <i class="fa-solid fa-star" style="color:#f1c40f;"></i> = Important — significant field for the Agent.
+                    <i class="fa-solid fa-hashtag" style="color:#1abc9c;"></i> = Number — numeric value, Agent can perform math.
                     <br>
                     <i class="fa-solid fa-sitemap" style="opacity:0.7;"></i> = Convert to group with sub-fields.
                 </div>
@@ -418,7 +420,7 @@ function bindModalEvents() {
     });
 
     // --- Icon toggle clicks ---
-    $modal.on('click.ass-tf', '.ass-tf-icon-secret, .ass-tf-icon-required, .ass-tf-icon-immutable, .ass-tf-icon-extend', function (e) {
+    $modal.on('click.ass-tf', '.ass-tf-icon-secret, .ass-tf-icon-required, .ass-tf-icon-immutable, .ass-tf-icon-extend, .ass-tf-icon-important, .ass-tf-icon-number', function (e) {
         e.stopPropagation();
         const $btn = $(this);
         const isActive = $btn.attr('data-active') === 'true';
