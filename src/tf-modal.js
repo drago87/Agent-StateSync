@@ -396,7 +396,17 @@ function bindModalEvents() {
     });
 
     // Input changes — live sync + save
-    $modal.on('input.ass-tf', '.ass-tf-name, .ass-tf-hint, .ass-tf-desc, .ass-tf-type', function () {
+    // Name changes also update data-key attributes so action buttons stay in sync
+    $modal.on('input.ass-tf', '.ass-tf-name', function () {
+        const newName = ($(this).val() || '').trim();
+        const $field = $(this).closest('.ass-tf-field');
+        $field.attr('data-key', newName);
+        // Update action buttons inside this field that reference data-key
+        $field.find('> .ass-tf-group-actions .ass-tf-add-subfield, > .ass-tf-group-actions .ass-tf-add-subgroup').attr('data-key', newName);
+        syncFieldsFromDOM();
+        scheduleSave();
+    });
+    $modal.on('input.ass-tf', '.ass-tf-hint, .ass-tf-desc, .ass-tf-type', function () {
         syncFieldsFromDOM();
         scheduleSave();
     });

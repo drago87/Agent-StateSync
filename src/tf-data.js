@@ -199,12 +199,17 @@ export function normalizeIsDynamic(fields) {
 
         const entry = { ...val };
         if (entry.fields !== undefined) {
-            // Group field
-            entry.is_dynamic = !entry.is_dynamic || entry.is_dynamic === false
+            // Group field — include is_dynamic only when non-default (not false/undefined/"False")
+            const dynNorm = !entry.is_dynamic || entry.is_dynamic === false || entry.is_dynamic === 'False'
                 ? 'False'
                 : entry.is_dynamic === true
                     ? 'True'
                     : String(entry.is_dynamic);
+            if (dynNorm !== 'False') {
+                entry.is_dynamic = dynNorm;
+            } else {
+                delete entry.is_dynamic;
+            }
             entry.fields = normalizeIsDynamic(entry.fields);
         } else {
             // Simple field — include is_dynamic as string only when non-default

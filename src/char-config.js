@@ -125,9 +125,13 @@ function tfAdditionsArrayToObject(additions) {
             const subFields = tfAdditionsArrayToObject(entry.fields);
             obj[name] = {
                 description: entry.description || '',
-                is_dynamic: isDynamicToString(entry.is_dynamic),
                 fields: subFields || {},
             };
+            // is_dynamic for group fields: include as string only when non-default
+            const dynStr = isDynamicToString(entry.is_dynamic);
+            if (dynStr !== 'False') {
+                obj[name].is_dynamic = dynStr;
+            }
             if (entry.secret) obj[name].secret = true;
         } else {
             obj[name] = {
