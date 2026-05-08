@@ -14,7 +14,7 @@
 //
 
 import state from './state.js';
-import { EXTENSION_NAME, META_KEY_SESSION } from './settings.js';
+import { EXTENSION_NAME } from './settings.js';
 import { getAgentOrigin } from './agent-url.js';
 import { getFreshContext } from './groups.js';
 
@@ -45,9 +45,8 @@ export function setupChatRenameListener() {
     }
 
     eventSource.on(eventTypes.CHAT_RENAMED, async (eventData) => {
-        // Only forward if we have an active session
-        const sessionId = state.context.chatMetadata?.[META_KEY_SESSION];
-        if (!sessionId) return;
+        // Only forward if we have an active initialized session
+        if (!state.sessionInitialized) return;
 
         const origin = getAgentOrigin();
         if (!origin) return;

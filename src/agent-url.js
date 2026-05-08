@@ -43,6 +43,7 @@ import {
     HEALTH_CHECK_INTERVAL_MS,
     HEALTH_CHECK_TIMEOUT_MS,
 } from './settings.js';
+import { getCurrentChatId } from './init-payload.js';
 
 // #############################################
 // # 3. Agent URL Resolution (Auto-Detect)
@@ -381,7 +382,20 @@ function resetLlmDots(reason) {
 
 /**
  * POST /api/ping - lights the "ST Extension" indicator on the Agent dashboard.
- * Sends last_changed timestamp so the Agent can tell STe if its config changed.
+ * Sends last_changed timestamp and current_chat_id.
+ * Sends initializing: true when an init is in progress.
+ *
+ * Request format (during initialization):
+ *   { last_changed: "...", current_chat_id: "chatName-chatId", initializing: true }
+ *
+ * Request format (after initialization):
+ *   { last_changed: "...", current_chat_id: "chatName-chatId" }
+ *
+ * Response format (during initialization):
+ *   { config_changed: true|false, current_chat_id_status: { current_chat_id, initialized: "true"|"false"|"failed", failed_message? } }
+ *
+ * Response format (after initialization):
+ *   { config_changed: true|false, current_chat_id_status: { current_chat_id, status: "initiated"|"deleted"|"missing"|"error" } }
  */
 async function pingAgent(healthUrl) {
     const origin = getAgentOrigin();
@@ -394,22 +408,49 @@ async function pingAgent(healthUrl) {
             body.last_changed = state.lastChanged;
         }
 
+        // Include current_chat_id using the same format as _chat_info.chat_id
+        const currentChatId = getCurrentChatId();
+        if (currentChatId) {
+            body.current_chat_id = currentChatId;
+        }
+
+        // Include initializing flag when init is in progress
+        if (state.initializing) {
+            body.initializing = true;
+        }
+
         const resp = await fetch(`${origin}/api/ping`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined,
         });
 
-        // If the Agent says config changed, fetch the new LLM status.
+        // Process the response
         if (resp.ok) {
             try {
                 const data = await resp.json();
+
+                // If the Agent says config changed, fetch the new LLM status.
                 if (data && data.config_changed) {
                     console.log(`[${EXTENSION_NAME}] Ping reports config changed — fetching LLM status.`);
                     fetchLlmConfig();
                 }
+
+                // Handle current_chat_id_status from the Agent
+                // (during init: initialized field, after init: status field)
+                if (data && data.current_chat_id_status) {
+                    // The notification polling system handles the full status logic.
+                    // Here we just handle the simple case: Agent confirms initiated.
+                    const statusData = data.current_chat_id_status;
+                    if (statusData.current_chat_id === getCurrentChatId()) {
+                        if (statusData.initialized === 'true' && !state.sessionInitialized) {
+                            state.sessionInitialized = true;
+                            window.dispatchEvent(new CustomEvent('ass-session-confirmed'));
+                        }
+                    }
+                }
             } catch (e) {
-                // Ping response may not include config_changed — that's OK
+                // Ping response may not include JSON — that's OK
             }
         }
     } catch (e) {

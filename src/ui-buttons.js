@@ -138,14 +138,16 @@ export function injectInitButton() {
         }
 
         $btn.css('opacity', '0.5').css('pointer-events', 'none');
-        toastr.info('Initializing Agent session...', 'Agent-StateSync');
+        toastr.info('Sending init to Agent...', 'Agent-StateSync');
 
         try {
             const success = await manualInitSession();
             if (success) {
-                toastr.success('Agent session initialized!', 'Agent-StateSync');
-                $btn.hide(); // Hide after successful init
-                state.sessionInitialized = true;
+                // Init was sent — now we wait for the Agent to process it.
+                // The notification poll will toast when initialized="true" or "failed".
+                // Don't hide the button yet — it will be hidden when
+                // ass-session-confirmed fires (from ping response).
+                $btn.css('opacity', '');  // Restore opacity but keep visible during init
             } else {
                 toastr.warning('Init failed. Check console for details.', 'Agent-StateSync');
             }
@@ -158,9 +160,10 @@ export function injectInitButton() {
 }
 
 /**
- * Show or hide the init button based on whether the current chat
- * already has an initialized session.
- * Call this on chat-changed and after page load.
+ * Show or hide the init button based on session state.
+ * - sessionInitialized = true → hide (session active)
+ * - initializing = true → show with spinner (init in progress)
+ * - both false → show normally (needs init)
  */
 export function updateInitButtonVisibility() {
     const $btn = $('#ass-init-session-btn');
@@ -168,7 +171,23 @@ export function updateInitButtonVisibility() {
 
     if (state.sessionInitialized) {
         $btn.hide();
+        $btn.removeClass('fa-spinner fa-spin');
+        $btn.addClass('fa-rocket');
     } else {
         $btn.show();
+        if (state.initializing) {
+            // Show spinner while Agent is processing
+            $btn.removeClass('fa-rocket');
+            $btn.addClass('fa-spinner fa-spin');
+            $btn.css('pointer-events', 'none');
+            $btn.attr('title', 'Agent is processing init...');
+        } else {
+            // Normal state — rocket icon, clickable
+            $btn.removeClass('fa-spinner fa-spin');
+            $btn.addClass('fa-rocket');
+            $btn.css('pointer-events', '');
+            $btn.css('opacity', '');
+            $btn.attr('title', 'Initialize the current chat');
+        }
     }
 }

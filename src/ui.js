@@ -27,56 +27,24 @@ export function hookChatEvents() {
     // Listen for session deletion notifications from the polling system
     $(window).on('ass-session-deleted', updateInitButtonVisibility);
 
-    // Listen for chat rename events from SillyTavern
-    if (state.context.event_types?.CHAT_RENAMED) {
-        state.context.eventSource?.on(state.context.event_types.CHAT_RENAMED, async (eventData) => {
-            console.log(`[${EXTENSION_NAME}] Chat renamed:`, eventData);
-
-            const settings = getSettings();
-            if (!settings.enabled || !eventData) return;
-
-            // Strip .jsonl extension from file names
-            const oldFileName = (eventData.oldFileName || '').replace(/\.jsonl$/, '');
-            const newFileName = (eventData.newFileName || '').replace(/\.jsonl$/, '');
-
-            if (!oldFileName || !newFileName || oldFileName === newFileName) return;
-
-            const origin = getAgentOrigin();
-            if (!origin) return;
-
-            const sessionId = state.context.chatMetadata?.['world_session_id'];
-            if (!sessionId) return;
-
-            try {
-                const resp = await fetch(`${origin}/api/sessions/${sessionId}/rename-chat`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        old_chat_id: oldFileName,
-                        new_chat_id: newFileName,
-                    }),
-                });
-
-                if (resp.ok) {
-                    console.log(`[${EXTENSION_NAME}] Chat rename sent to Agent: ${oldFileName} -> ${newFileName}`);
-                } else {
-                    console.warn(`[${EXTENSION_NAME}] Agent rename returned ${resp.status}`);
-                }
-            } catch (e) {
-                console.warn(`[${EXTENSION_NAME}] Failed to send chat rename to Agent:`, e.message);
-            }
-        });
-    }
+    // Listen for session confirmation from ping (Agent confirms session exists)
+    $(window).on('ass-session-confirmed', updateInitButtonVisibility);
 
     const eventBus = state.context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {
-            console.log(`[${EXTENSION_NAME}] Chat changed - proactive session setup`);
+            console.log(`[${EXTENSION_NAME}] Chat changed - checking for existing session`);
             state.lastUserMsgHash = null;
             state.lastAssistantMsgHash = null;
             state.lastConversationCount = 0;
             state.currentSwipeIndex = 0;
             state.configSynced = false;
+
+            // Reset session state — the new chat may not be initialized.
+            // proactiveChatChanged() will set it back to true if the Agent
+            // has an existing session for this chat (via ping response).
+            state.sessionInitialized = false;
+            state.initializing = false;
 
             // Reset group cache so it reloads for the new chat
             state.cachedGroups = null;
@@ -190,16 +158,20 @@ export function init(debug = false) {
         console.log(`[${EXTENSION_NAME}] Settings:`, getSettings());
         console.log(`[${EXTENSION_NAME}] Agent URL (auto-detected):`, getAgentOrigin());
 
-        // --- Initial proactive session setup (for the chat that's open on page load) ---
+        // --- Initial proactive session check (for the chat that's open on page load) ---
+        // Does NOT auto-create or auto-initialize sessions.
+        // If the Agent has an existing session for this chat, STe re-attaches to it.
+        // Otherwise, the user must press the Init (rocket) button manually.
         const settings = getSettings();
         if (settings.enabled) {
+            state.sessionInitialized = false;  // Start as false — proactive will set true if session exists
             // Small delay to let ST finish loading the initial chat
             setTimeout(async () => {
                 try {
                     await proactiveChatChanged();
                     updateInitButtonVisibility();
                 } catch (e) {
-                    console.warn(`[${EXTENSION_NAME}] Initial proactive setup failed:`, e.message);
+                    console.warn(`[${EXTENSION_NAME}] Initial proactive check failed:`, e.message);
                 }
             }, 2000);
         }

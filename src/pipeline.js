@@ -7,12 +7,12 @@
 
 import state from './state.js';
 import {
-    EXTENSION_NAME, META_KEY_SESSION, META_KEY_COUNTER,
+    EXTENSION_NAME, META_KEY_COUNTER,
     getSettings, isBypassMode, syncConfigToAgent, updateStatus,
 } from './settings.js';
 import { resolveBackendOrigin, getAgentOrigin } from './agent-url.js';
 import { loadGroupData } from './groups.js';
-import { ensureSession } from './session.js';
+import { getCurrentChatId } from './init-payload.js';
 import { getCharInitType } from './char-config.js';
 
 // #############################################
@@ -237,10 +237,39 @@ export function interceptFetch() {
                 console.warn(`[${EXTENSION_NAME}] Group data load failed (continuing in single-char mode):`, e.message);
             }
 
-            // --- Ensure session exists (fallback if proactive didn't run) ---
-            const sessionId = await ensureSession(backendOrigin);
+            // --- Check if session has been initialized via the Init button ---
+            // If not, block the request and show an error — the user must
+            // press the Init (rocket) button before they can chat.
+            if (!state.sessionInitialized) {
+                const errMsg = 'Chat not initialized. Press the Rocket button to initialize the session with the Agent before chatting.';
+                console.warn(`[${EXTENSION_NAME}] ${errMsg}`);
+                if (typeof toastr !== 'undefined') {
+                    toastr.error(errMsg, 'Agent-StateSync');
+                }
+                updateStatus('Not initialized — press Rocket', '#d9534f');
+
+                // Return a dummy error response so ST doesn't hang
+                // The user sees the toastr and must press Init first.
+                const errorBody = [
+                    `data: ${JSON.stringify({ id: 'not-initialized', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'agent-statesync', choices: [{ index: 0, delta: { role: 'assistant', content: '[Agent-StateSync Error: Chat not initialized. Press the Rocket button to initialize before chatting.]' }, finish_reason: null }] })}\n\n`,
+                    `data: ${JSON.stringify({ id: 'not-initialized', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'agent-statesync', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+                    'data: [DONE]\n\n',
+                ].join('');
+
+                return new Response(errorBody, {
+                    status: 200,
+                    headers: {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                    },
+                });
+            }
+
+            // --- Session is initialized — get session identifier ---
+            const sessionId = getCurrentChatId();
             if (!sessionId) {
-                throw new Error('Failed to acquire session ID.');
+                throw new Error('No chat ID available. Open a chat and press the Init button.');
             }
 
             // --- Sync config on first request ---

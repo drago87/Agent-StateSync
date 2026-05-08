@@ -1,8 +1,8 @@
-// init-payload.js — Agent-StateSync Init Payload Builder (v3.1)
+// init-payload.js — Agent-StateSync Init Payload Builder (v3.2)
 // File Version: 1.2.0
 //
 // Constructs the character/scenario data payloads sent to
-// POST /api/sessions/{id}/init.  Handles single-character,
+// POST /api/init.  Handles single-character,
 // multi-character, scenario, and group chat formats.
 //
 // Includes _chat_info with chat_id format:
@@ -37,15 +37,18 @@ import { getFreshContext } from './groups.js';
  * Uses the first message from the chat (not the card's first_mes field).
  * Excludes empty fields.
  *
+ * When first_mes is present, mess_id and swipe_id are included to tell
+ * the Agent exactly which message in the chat history this corresponds to.
+ *
  * IMPORTANT: charData MUST be a character object from context.characters[],
  * NOT the raw context object.  SillyTavern's getContext() does not include
  * description, personality, scenario, or mes_example as top-level properties.
  *
  * @param {object} charData - Character object from context.characters[]
- * @param {string|null} firstMesOverride - Override first_mes (from chat messages)
+ * @param {{ mes: string, mess_id: number, swipe_id: number }|null} firstMesInfo - First message info from chat
  * @returns {object} Clean data object with only non-empty fields
  */
-function buildCardData(charData, firstMesOverride) {
+function buildCardData(charData, firstMesInfo) {
     const data = {};
 
     if (!charData || typeof charData !== 'object') {
@@ -62,8 +65,14 @@ function buildCardData(charData, firstMesOverride) {
     const scenario = charData.scenario || '';
     if (scenario) data.scenario = scenario;
 
-    const firstMes = firstMesOverride || '';
-    if (firstMes) data.first_mes = firstMes;
+    const firstMes = firstMesInfo?.mes || '';
+    if (firstMes) {
+        data.first_mes = firstMes;
+        // Include mess_id and swipe_id so the Agent knows exactly which
+        // message in the chat history this first_mes corresponds to.
+        data.mess_id = firstMesInfo.mess_id;
+        data.swipe_id = firstMesInfo.swipe_id;
+    }
 
     const mesExample = charData.mes_example || '';
     if (mesExample) data.mes_example = mesExample;
@@ -105,8 +114,11 @@ function buildPersona() {
  * appears as the sender (is_user=false, name matches).
  * In single-char chats, we just grab the first non-system message.
  *
+ * Returns an object with the message text and its mess_id/swipe_id,
+ * or null if no message found.
+ *
  * @param {string|null} charName - Character name to look for (group mode)
- * @returns {string|null} The message text, or null if no message found
+ * @returns {{ mes: string, mess_id: number, swipe_id: number }|null}
  */
 function getFirstMesFromChat(charName) {
     const ctx = getFreshContext();
@@ -115,20 +127,28 @@ function getFirstMesFromChat(charName) {
 
     if (charName) {
         // Group mode: find the first message from this character
-        for (const msg of chat) {
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
             if (!msg.is_user && msg.name === charName && msg.mes) {
-                return msg.mes;
+                return {
+                    mes: msg.mes,
+                    mess_id: i,
+                    swipe_id: typeof msg.swipe_id === 'number' ? msg.swipe_id : 0,
+                };
             }
         }
-        // Also try matching with the ForceAvatar-based name
-        // (ST may store character names differently in chat messages)
         return null;
     }
 
     // Single-char mode: first non-user message
-    for (const msg of chat) {
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
         if (!msg.is_user && msg.mes) {
-            return msg.mes;
+            return {
+                mes: msg.mes,
+                mess_id: i,
+                swipe_id: typeof msg.swipe_id === 'number' ? msg.swipe_id : 0,
+            };
         }
     }
 
@@ -169,13 +189,13 @@ function readMemberCharConfig(charObj) {
  * Each member respects its own card type classification.
  *
  * @param {object} charObj - Resolved character object
- * @param {string|null} firstMes - First message from chat for this member (or null)
+ * @param {{ mes: string, mess_id: number, swipe_id: number }|null} firstMesInfo - First message info from chat
  * @returns {object} Member payload object
  */
-function buildGroupMemberPayload(charObj, firstMes) {
+function buildGroupMemberPayload(charObj, firstMesInfo) {
     const config = readMemberCharConfig(charObj);
     const cardName = charObj.name || 'Unknown';
-    const cardData = buildCardData(charObj, firstMes);
+    const cardData = buildCardData(charObj, firstMesInfo);
 
     const member = {
         is_multi_character: config.type === 'multi-character',
@@ -278,16 +298,29 @@ export function getSessionIdentity() {
 }
 
 /**
+ * Get the formatted current_chat_id string used in _chat_info and /api/ping.
+ * chat_id format: chatName-rawChatId (single) or groupName-rawChatId (group)
+ * Uses the same getSessionIdentity() to ensure consistency across all uses.
+ *
+ * Returns empty string if no chat is active.
+ */
+export function getCurrentChatId() {
+    const { st_chat_id, name } = getSessionIdentity();
+
+    if (name && st_chat_id) {
+        return `${name}-${st_chat_id}`;
+    }
+
+    return st_chat_id || name || '';
+}
+
+/**
  * Build the _chat_info object for the init payload.
  * chat_id format: chatName-rawChatId (single) or groupName-rawChatId (group)
  * Uses the same getSessionIdentity() to ensure consistency.
  */
 function buildChatInfo() {
-    const { st_chat_id, name } = getSessionIdentity();
-
-    const chatId = name && st_chat_id
-        ? `${name}-${st_chat_id}`
-        : st_chat_id || name;
+    const chatId = getCurrentChatId();
 
     return {
         chat_id: chatId,
@@ -296,7 +329,7 @@ function buildChatInfo() {
 }
 
 /**
- * Build the full init payload for POST /api/sessions/{id}/init
+ * Build the full init payload for POST /api/init
  * according to the v3.0 spec.
  *
  * Handles all cases:
@@ -376,14 +409,11 @@ async function buildSingleCharInitPayload() {
     const cardNames = getCharInitNames();   // [] for character/scenario, ['Alice','Bob'] for multi
     const ctx = getFreshContext();
     const cardName = ctx.name2 || '';
-    const firstMes = getFirstMesFromChat(null);
+    const firstMesInfo = getFirstMesFromChat(null);
 
     // --- Resolve the active character object ---
-    // Use ctx.characters[ctx.characterId] instead of ctx directly.
-    // The context object does NOT have description/personality/scenario/
-    // mes_example as top-level properties.
     const charObj = await resolveActiveCharacter(ctx);
-    const cardData = buildCardData(charObj || {}, firstMes);
+    const cardData = buildCardData(charObj || {}, firstMesInfo);
     const persona = buildPersona();
     const chatName = ctx.name2 || '';
 
@@ -499,8 +529,8 @@ function buildGroupInitPayload() {
 
     // --- Build member payloads ---
     const memberPayloads = sortedMembers.map(m => {
-        const firstMes = getFirstMesFromChat(m.name);
-        const member = buildGroupMemberPayload(m, firstMes);
+        const firstMesInfo = getFirstMesFromChat(m.name);
+        const member = buildGroupMemberPayload(m, firstMesInfo);
 
         // If the group has a group_scenario, strip the scenario key from each member
         if (groupScenario && member.scenario) {
