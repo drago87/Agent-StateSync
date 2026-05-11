@@ -35,8 +35,8 @@ import { getCurrentChatId } from './init-payload.js';
 // #############################################
 
 let pollTimerId = null;
-const POLL_INTERVAL_MS = 15000; // 15 seconds
-const INIT_POLL_INTERVAL_MS = 3000; // 3 seconds while initializing (faster feedback)
+const POLL_INTERVAL_MS = 3000; // 3 seconds
+const INIT_POLL_INTERVAL_MS = 3000; // 3 seconds while initializing (same — always fast)
 
 // #############################################
 // # Polling Control

@@ -1,4 +1,4 @@
-// tf-data.js
+// tf-data.js — Agent-StateSync Tracked Fields: Shared State & Data Layer
 // File Version: 1.2.0
 //
 // Contains: Module-level state (currentFields, openCategories, saveTimeout,
@@ -188,11 +188,9 @@ export function scheduleSave() {
 }
 
 /**
- * Recursively normalize field values in a tracked fields payload dict.
+ * Recursively normalize is_dynamic values in a tracked fields payload dict.
  * Converts: false/undefined → "False", true → "True", strings kept as-is.
  * Ensures is_dynamic is always a string in the payload output.
- * Excludes default-false values (is_dynamic: false, extends_only: false,
- * is_important: false, is_number: false) to reduce payload size.
  */
 export function normalizeIsDynamic(fields) {
     if (!fields || typeof fields !== 'object') return fields;
@@ -217,13 +215,9 @@ export function normalizeIsDynamic(fields) {
             if (!entry.extends_only) {
                 delete entry.extends_only;
             }
-            // Exclude is_important when false or undefined (default)
-            if (!entry.is_important) {
-                delete entry.is_important;
-            }
-            // Exclude is_number when false or undefined (default)
-            if (!entry.is_number) {
-                delete entry.is_number;
+            // Exclude optional when false or undefined (default — only include when true)
+            if (!entry.optional) {
+                delete entry.optional;
             }
             entry.fields = normalizeIsDynamic(entry.fields);
         } else {
@@ -238,13 +232,9 @@ export function normalizeIsDynamic(fields) {
             if (!entry.extends_only) {
                 delete entry.extends_only;
             }
-            // Exclude is_important when false or undefined (default)
-            if (!entry.is_important) {
-                delete entry.is_important;
-            }
-            // Exclude is_number when false or undefined (default)
-            if (!entry.is_number) {
-                delete entry.is_number;
+            // Exclude optional when false or undefined (default — only include when true)
+            if (!entry.optional) {
+                delete entry.optional;
             }
         }
         result[key] = entry;
@@ -253,11 +243,53 @@ export function normalizeIsDynamic(fields) {
 }
 
 /**
+ * Ensure currentFields is fresh by re-reading from ST's extensionSettings.
+ *
+ * The module-level currentFields cache can become stale when:
+ *   - The user edits fields in the TF modal, then closes it (syncFieldsFromDOM
+ *     updates the cache, but a debounced saveTrackedFields may not have flushed)
+ *   - ST's settings are modified externally or via import
+ *   - The page/session has been running for a while
+ *
+ * This function forces a flush of any pending debounced save, then re-reads
+ * the persisted settings into currentFields so the next payload build
+ * is guaranteed to use the latest data.
+ */
+export function ensureFieldsFresh() {
+    // Flush any pending debounced save so extensionSettings is up-to-date
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    if (currentFields) {
+        saveTrackedFields();
+    }
+
+    // Re-read from extensionSettings (the source of truth)
+    const saved = state.context.extensionSettings?.[TRACKED_FIELDS_KEY];
+    if (saved && typeof saved === 'object') {
+        const categories = ['character', 'scenario', 'shared'];
+        const hasContent = categories.some(cat => {
+            const catData = saved[cat];
+            return catData && typeof catData === 'object' && Object.keys(catData).length > 0;
+        });
+        if (hasContent) {
+            currentFields = saved;
+            return;
+        }
+    }
+    // No saved data or empty — keep whatever we have (may be defaults)
+}
+
+/**
  * Get the current tracked fields for the init payload.
  * Called by session.js when building the POST body.
  * is_dynamic values are normalized to strings.
+ *
+ * ALWAYS refreshes from extensionSettings first to guarantee the
+ * payload contains the latest field definitions, even if the
+ * user added fields without opening the TF modal in this session.
  */
 export function getTrackedFieldsForPayload() {
+    ensureFieldsFresh();
     if (!currentFields) return null;
     const result = {};
     for (const cat of ['character', 'scenario', 'shared']) {
