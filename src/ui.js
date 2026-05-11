@@ -23,6 +23,34 @@ import { injectCharConfigButton, injectInitButton, updateInitButtonVisibility } 
 // # Chat Event Hooks
 // #############################################
 
+/**
+ * Schedule a debounced proactive chat-changed check.
+ *
+ * When "Auto-load Last Chat" is enabled, ST fires two rapid chat-changed
+ * events on startup: first for the default "SillyTavern System" empty chat,
+ * then for the actual last chat. Without debouncing, the first event
+ * triggers a premature "New chat detected" popup.
+ *
+ * This function cancels any previously scheduled check and starts a new
+ * 1500ms timer, so only the LAST chat in a rapid sequence is acted upon.
+ */
+function scheduleProactiveCheck() {
+    // Cancel any previously scheduled check
+    if (state.chatChangedDebounceTimer) {
+        clearTimeout(state.chatChangedDebounceTimer);
+    }
+
+    state.chatChangedDebounceTimer = setTimeout(async () => {
+        state.chatChangedDebounceTimer = null;
+        try {
+            await proactiveChatChanged();
+            updateInitButtonVisibility();
+        } catch (e) {
+            console.warn(`[${EXTENSION_NAME}] Proactive check failed:`, e.message);
+        }
+    }, 1500);
+}
+
 export function hookChatEvents() {
     // Listen for session deletion notifications from the polling system
     $(window).on('ass-session-deleted', updateInitButtonVisibility);
@@ -33,7 +61,7 @@ export function hookChatEvents() {
     const eventBus = state.context.eventBus;
     if (eventBus) {
         eventBus.on('chat-changed', () => {
-            console.log(`[${EXTENSION_NAME}] Chat changed - checking for existing session`);
+            console.log(`[${EXTENSION_NAME}] Chat changed - debouncing proactive check`);
             state.lastUserMsgHash = null;
             state.lastAssistantMsgHash = null;
             state.lastConversationCount = 0;
@@ -58,15 +86,10 @@ export function hookChatEvents() {
             const settings = getSettings();
             if (settings.enabled) {
                 startHealthChecks();
-                // Delay 300ms before proactive setup to let ST update
-                // context.groupId and other context properties. Without this
-                // delay, groupId may still reflect the PREVIOUS chat, causing
-                // wrong group/single-char detection.
-                setTimeout(() => {
-                    proactiveChatChanged().then(() => {
-                        updateInitButtonVisibility();
-                    });
-                }, 300);
+                // Debounced proactive check: waits 1500ms so rapid
+                // chat-changed events (e.g. Auto-load Last Chat) cancel
+                // each other and only the final chat is checked.
+                scheduleProactiveCheck();
             }
         });
     }
@@ -162,18 +185,26 @@ export function init(debug = false) {
         // Does NOT auto-create or auto-initialize sessions.
         // If the Agent has an existing session for this chat, STe re-attaches to it.
         // Otherwise, the user must press the Init (rocket) button manually.
+        //
+        // Uses scheduleProactiveCheck() (debounced 1500ms) so that if ST fires
+        // chat-changed events during startup (e.g. Auto-load Last Chat), they
+        // share the same debounce timer and only the final chat is checked.
+        // The 2000ms fallback below only fires if NO chat-changed event occurs.
         const settings = getSettings();
         if (settings.enabled) {
             state.sessionInitialized = false;  // Start as false — proactive will set true if session exists
-            // Small delay to let ST finish loading the initial chat
-            setTimeout(async () => {
-                try {
-                    await proactiveChatChanged();
-                    updateInitButtonVisibility();
-                } catch (e) {
-                    console.warn(`[${EXTENSION_NAME}] Initial proactive check failed:`, e.message);
+            // Schedule the debounced check. If a chat-changed event fires
+            // within the 1500ms window, it resets the timer automatically.
+            scheduleProactiveCheck();
+
+            // Safety net: if no chat-changed event fires at all (rare edge
+            // case), schedule a second check after 3 seconds. The debounce
+            // in scheduleProactiveCheck ensures only one check actually runs.
+            setTimeout(() => {
+                if (!state.proactiveInProgress && !state.sessionInitialized) {
+                    scheduleProactiveCheck();
                 }
-            }, 2000);
+            }, 3000);
         }
 
         resolve();

@@ -35,6 +35,7 @@ const state = {
     proactiveInProgress: false,    // Prevents overlapping proactive calls
     sessionInitialized: false,     // Whether the current chat has an initialized Agent session
     initializing: false,           // True while POST /api/init is in progress and Agent is processing
+    chatChangedDebounceTimer: null, // Debounce timer for chat-changed → proactive check
 
     // Interceptor log for debug display
     lastInterceptLog: null,
