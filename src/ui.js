@@ -48,7 +48,7 @@ function scheduleProactiveCheck() {
         } catch (e) {
             console.warn(`[${EXTENSION_NAME}] Proactive check failed:`, e.message);
         }
-    }, 1500);
+    }, 3000);
 }
 
 export function hookChatEvents() {
