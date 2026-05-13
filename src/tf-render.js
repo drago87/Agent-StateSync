@@ -63,10 +63,10 @@ export function dynamicValueToStored(val) {
 // #############################################
 
 /**
- * Render all 6 icon toggle buttons for any field type (simple or group).
- * Icons: Secret (purple), Required (orange), Optional (teal), Immutable (red), Extend (blue), Dynamic (green)
+ * Render all 7 icon toggle buttons for any field type (simple or group).
+ * Icons: Secret (purple), Required (orange), Optional (teal), Immutable (red), Extend (blue), Dynamic (green), Important (gold)
  */
-export function renderFieldIcons({ secret, required, optional, immutable, extendsOnly, isDynamic, allowSecret }) {
+export function renderFieldIcons({ secret, required, optional, immutable, extendsOnly, isDynamic, isImportant, allowSecret }) {
     const dynValue = normalizeDynamicValue(isDynamic);
     const dynActive = dynValue !== 'false';
 
@@ -98,6 +98,10 @@ export function renderFieldIcons({ secret, required, optional, immutable, extend
         <button type="button" class="ass-tf-icon-btn ass-tf-icon-dynamic${dynActive ? ' active' : ''}" data-value="${dynValue}"
                 title="Dynamic — entries keyed by name">
             <i class="fa-solid fa-shuffle"></i>
+        </button>
+        <button type="button" class="ass-tf-icon-btn ass-tf-icon-important${isImportant ? ' active' : ''}" data-active="${!!isImportant}"
+                title="Important — significant field for the Agent">
+            <i class="fa-solid fa-star"></i>
         </button>
     </div>`;
 }
@@ -231,6 +235,7 @@ export function renderSimpleField(category, key, field, depth, allowSecret) {
     const required = field.required || false;
     const optional = field.optional || false;
     const immutable = field.immutable || false;
+    const isImportant = field.is_important || false;
     const isNested = depth > 0;
 
     const addSubBtn = !isNested
@@ -243,7 +248,7 @@ export function renderSimpleField(category, key, field, depth, allowSecret) {
     const depthClass = isNested ? 'ass-tf-nested' : '';
 
     const iconsHtml = renderFieldIcons({
-        secret, required, optional, immutable, extendsOnly, isDynamic, allowSecret,
+        secret, required, optional, immutable, extendsOnly, isDynamic, isImportant, allowSecret,
     });
 
     return `
@@ -273,6 +278,7 @@ export function renderGroupField(category, key, field, depth, allowSecret) {
     const required = field.required || false;
     const optional = field.optional || false;
     const immutable = field.immutable || false;
+    const isImportant = field.is_important || false;
     const fields = field.fields || {};
 
     let subfieldsHtml = '';
@@ -281,7 +287,7 @@ export function renderGroupField(category, key, field, depth, allowSecret) {
     }
 
     const iconsHtml = renderFieldIcons({
-        secret, required, optional, immutable, extendsOnly, isDynamic, allowSecret,
+        secret, required, optional, immutable, extendsOnly, isDynamic, isImportant, allowSecret,
     });
 
     return `
@@ -382,12 +388,14 @@ export function readFieldFromDOM($el) {
         const required = readIconActive($row, '.ass-tf-icon-required');
         const optional = readIconActive($row, '.ass-tf-icon-optional');
         const immutable = readIconActive($row, '.ass-tf-icon-immutable');
+        const isImportant = readIconActive($row, '.ass-tf-icon-important');
         if (isDynamic) result.is_dynamic = isDynamic;
         if (extendsOnly) result.extends_only = true;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (optional) result.optional = true;
         if (immutable) result.immutable = true;
+        if (isImportant) result.is_important = true;
 
         $el.children('.ass-tf-subfields').children('.ass-tf-field').each(function () {
             // Read the sub-key from the name input (user may have edited it),
@@ -410,12 +418,14 @@ export function readFieldFromDOM($el) {
         const required = readIconActive($row, '.ass-tf-icon-required');
         const optional = readIconActive($row, '.ass-tf-icon-optional');
         const immutable = readIconActive($row, '.ass-tf-icon-immutable');
+        const isImportant = readIconActive($row, '.ass-tf-icon-important');
         if (extendsOnly) result.extends_only = true;
         if (isDynamic) result.is_dynamic = isDynamic;
         if (secret) result.secret = true;
         if (required) result.required = true;
         if (optional) result.optional = true;
         if (immutable) result.immutable = true;
+        if (isImportant) result.is_important = true;
 
         return result;
     }
