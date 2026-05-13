@@ -1,5 +1,5 @@
-// persona-config.js
-// File Version: 3.2.0
+// persona-config.js — Agent-StateSync Persona Config Panel
+// File Version: 3.1.0
 //
 // Brain button in the Persona controls button bar.
 // Opens a panel where the user can configure per-persona:
@@ -62,6 +62,7 @@ function migrateTFAdditionsToArray(obj) {
             };
             if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
             if (field.extends_only) entry.extends_only = true;
+            if (field.optional) entry.optional = true;
             if (field.secret) entry.secret = true;
             if (field.required) entry.required = true;
             if (field.immutable) entry.immutable = true;
@@ -75,6 +76,7 @@ function migrateTFAdditionsToArray(obj) {
         };
         if (field.extends_only) entry.extends_only = true;
         if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
+        if (field.optional) entry.optional = true;
         if (field.secret) entry.secret = true;
         if (field.required) entry.required = true;
         if (field.immutable) entry.immutable = true;
@@ -331,6 +333,7 @@ function openPersonaConfigPanel() {
                     <br>
                     <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters (Character category only).
                     <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> = Required — must be provided.
+                    <i class="fa-solid fa-circle-question" style="color:#17a2b8;"></i> = Optional — may be omitted or empty.
                     <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> = Immutable — will only be written during initialization.
                     <i class="fa-solid fa-maximize" style="color:#3498db;"></i> = Extend — only extends, will not overwrite.
                     <i class="fa-solid fa-shuffle" style="color:#27ae60;"></i> = Dynamic — entries keyed by name (click for options).

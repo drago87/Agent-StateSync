@@ -1,5 +1,5 @@
-// tf-css.js
-// File Version: 1.1.0
+// tf-css.js — Agent-StateSync Tracked Fields: CSS Injection
+// File Version: 1.0.0
 //
 // Contains the injectCSS function that injects the full tracked fields
 // editor stylesheet into the document head. Separated from logic for
@@ -218,6 +218,8 @@ export function injectCSS() {
     .ass-tf-icon-secret.active { background: rgba(155, 89, 182, 0.15); border-color: rgba(155, 89, 182, 0.3); }
     .ass-tf-icon-required { color: #e67e22; }
     .ass-tf-icon-required.active { background: rgba(230, 126, 34, 0.15); border-color: rgba(230, 126, 34, 0.3); }
+    .ass-tf-icon-optional { color: #17a2b8; }
+    .ass-tf-icon-optional.active { background: rgba(23, 162, 184, 0.15); border-color: rgba(23, 162, 184, 0.3); }
     .ass-tf-icon-immutable { color: #e74c3c; }
     .ass-tf-icon-immutable.active { background: rgba(231, 76, 60, 0.15); border-color: rgba(231, 76, 60, 0.3); }
     .ass-tf-icon-extend { color: #3498db; }

@@ -1,5 +1,5 @@
-// init-payload.js — Agent-StateSync Init Payload Builder (v3.2)
-// File Version: 1.2.0
+// init-payload.js — Agent-StateSync Init Payload Builder (v3.3)
+// File Version: 1.3.0
 //
 // Constructs the character/scenario data payloads sent to
 // POST /api/init.  Handles single-character,
@@ -29,6 +29,38 @@ import { getTrackedFieldsForPayload } from './tracked-fields.js';
 import { getFreshContext } from './groups.js';
 
 // #############################################
+// # Macro Substitution
+// #############################################
+
+/**
+ * Replace {{user}} and {{char}} macros in text strings.
+ * {{user}} is replaced with the persona name (ctx.name1).
+ * {{char}} is replaced with the card/character name.
+ *
+ * By default, both macros are replaced.  Pass replaceChar=false
+ * to skip {{char}} substitution (used for persona description
+ * where {{char}} is kept as-is since the persona may not know
+ * which character it will be used with).
+ *
+ * @param {string} text - The text to process
+ * @param {string} userName - The persona/user name to substitute for {{user}}
+ * @param {string} charName - The card/character name to substitute for {{char}}
+ * @param {boolean} [replaceChar=true] - Whether to replace {{char}}
+ * @returns {string} The text with macros replaced
+ */
+function replaceMacros(text, userName, charName, replaceChar = true) {
+    if (typeof text !== 'string') return text;
+    let result = text;
+    if (userName) {
+        result = result.replaceAll('{{user}}', userName);
+    }
+    if (replaceChar && charName) {
+        result = result.replaceAll('{{char}}', charName);
+    }
+    return result;
+}
+
+// #############################################
 // # Payload Helper Functions
 // #############################################
 
@@ -46,9 +78,11 @@ import { getFreshContext } from './groups.js';
  *
  * @param {object} charData - Character object from context.characters[]
  * @param {{ mes: string, mess_id: number, swipe_id: number }|null} firstMesInfo - First message info from chat
+ * @param {string} userName - Persona/user name for {{user}} substitution
+ * @param {string} charName - Card/character name for {{char}} substitution
  * @returns {object} Clean data object with only non-empty fields
  */
-function buildCardData(charData, firstMesInfo) {
+function buildCardData(charData, firstMesInfo, userName, charName) {
     const data = {};
 
     if (!charData || typeof charData !== 'object') {
@@ -57,17 +91,17 @@ function buildCardData(charData, firstMesInfo) {
     }
 
     const desc = charData.description || '';
-    if (desc) data.description = desc;
+    if (desc) data.description = replaceMacros(desc, userName, charName);
 
     const personality = charData.personality || '';
-    if (personality) data.personality = personality;
+    if (personality) data.personality = replaceMacros(personality, userName, charName);
 
     const scenario = charData.scenario || '';
-    if (scenario) data.scenario = scenario;
+    if (scenario) data.scenario = replaceMacros(scenario, userName, charName);
 
     const firstMes = firstMesInfo?.mes || '';
     if (firstMes) {
-        data.first_mes = firstMes;
+        data.first_mes = replaceMacros(firstMes, userName, charName);
         // Include mess_id and swipe_id so the Agent knows exactly which
         // message in the chat history this first_mes corresponds to.
         data.mess_id = firstMesInfo.mess_id;
@@ -75,7 +109,7 @@ function buildCardData(charData, firstMesInfo) {
     }
 
     const mesExample = charData.mes_example || '';
-    if (mesExample) data.mes_example = mesExample;
+    if (mesExample) data.mes_example = replaceMacros(mesExample, userName, charName);
 
     return data;
 }
@@ -91,7 +125,10 @@ function buildPersona() {
     if (name) persona.name = name;
 
     const desc = ctx.powerUserSettings?.persona_description || '';
-    if (desc) persona.description = desc;
+    // Replace {{user}} with the persona name, but keep {{char}} as-is
+    // in the persona description — the persona may not know which
+    // character it will be paired with.
+    if (desc) persona.description = replaceMacros(desc, name, '', false);
 
     // Per-persona tracked field additions
     const personaTFAdditions = getPersonaTrackedFieldAdditions();
@@ -190,12 +227,13 @@ function readMemberCharConfig(charObj) {
  *
  * @param {object} charObj - Resolved character object
  * @param {{ mes: string, mess_id: number, swipe_id: number }|null} firstMesInfo - First message info from chat
+ * @param {string} userName - Persona/user name for {{user}} substitution
  * @returns {object} Member payload object
  */
-function buildGroupMemberPayload(charObj, firstMesInfo) {
+function buildGroupMemberPayload(charObj, firstMesInfo, userName) {
     const config = readMemberCharConfig(charObj);
     const cardName = charObj.name || 'Unknown';
-    const cardData = buildCardData(charObj, firstMesInfo);
+    const cardData = buildCardData(charObj, firstMesInfo, userName, cardName);
 
     const member = {
         is_multi_character: config.type === 'multi-character',
@@ -413,7 +451,8 @@ async function buildSingleCharInitPayload() {
 
     // --- Resolve the active character object ---
     const charObj = await resolveActiveCharacter(ctx);
-    const cardData = buildCardData(charObj || {}, firstMesInfo);
+    const userName = ctx.name1 || '';
+    const cardData = buildCardData(charObj || {}, firstMesInfo, userName, cardName);
     const persona = buildPersona();
     const chatName = ctx.name2 || '';
 
@@ -528,9 +567,11 @@ function buildGroupInitPayload() {
     const groupScenario = groupScenarioMember?.scenario || '';
 
     // --- Build member payloads ---
+    const gCtx2 = getFreshContext();
+    const gUserName = gCtx2.name1 || '';
     const memberPayloads = sortedMembers.map(m => {
         const firstMesInfo = getFirstMesFromChat(m.name);
-        const member = buildGroupMemberPayload(m, firstMesInfo);
+        const member = buildGroupMemberPayload(m, firstMesInfo, gUserName);
 
         // If the group has a group_scenario, strip the scenario key from each member
         if (groupScenario && member.scenario) {

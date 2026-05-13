@@ -1,5 +1,5 @@
-// char-config.js
-// File Version: 3.3.0
+// char-config.js — Agent-StateSync Character Config Panel
+// File Version: 3.2.0
 //
 // Brain button in the Character Sheet Bar (star/skull row).
 // Opens a panel where the user defines how the Agent should parse
@@ -132,6 +132,10 @@ function tfAdditionsArrayToObject(additions) {
             if (dynStr !== 'False') {
                 obj[name].is_dynamic = dynStr;
             }
+            if (entry.extends_only) obj[name].extends_only = true;
+            if (entry.optional) obj[name].optional = true;
+            if (entry.required) obj[name].required = true;
+            if (entry.immutable) obj[name].immutable = true;
             if (entry.secret) obj[name].secret = true;
             if (entry.is_important) obj[name].is_important = true;
         } else {
@@ -146,6 +150,9 @@ function tfAdditionsArrayToObject(additions) {
             if (dynStr !== 'False') {
                 obj[name].is_dynamic = dynStr;
             }
+            if (entry.optional) obj[name].optional = true;
+            if (entry.required) obj[name].required = true;
+            if (entry.immutable) obj[name].immutable = true;
             if (entry.secret) obj[name].secret = true;
             if (entry.is_important) obj[name].is_important = true;
         }
@@ -693,6 +700,7 @@ function openCharConfigPanel() {
                         <br>
                         <i class="fa-solid fa-eye-slash" style="color:#9b59b6;"></i> = Secret — hidden from other characters (Character category only).
                         <i class="fa-solid fa-asterisk" style="color:#e67e22;"></i> = Required — must be provided.
+                        <i class="fa-solid fa-circle-question" style="color:#17a2b8;"></i> = Optional — may be omitted or empty.
                         <i class="fa-solid fa-lock" style="color:#e74c3c;"></i> = Immutable — will only be written during initialization.
                         <i class="fa-solid fa-maximize" style="color:#3498db;"></i> = Extend — only extends, will not overwrite.
                         <i class="fa-solid fa-shuffle" style="color:#27ae60;"></i> = Dynamic — entries keyed by name (click for options).
