@@ -1,5 +1,5 @@
-// btf-render.js — Agent-StateSync Tracked Field Additions: Rendering
-// File Version: 1.0.0
+// btf-render.js
+// File Version: 1.1.0
 //
 // Contains all HTML generation: helpers, icon toggles, dynamic popup,
 // category rendering, field rendering, and container re-render.
@@ -27,7 +27,7 @@ export function escapeAttr(str) {
 }
 
 function buildTypeOptions(selected) {
-    const types = ['string', 'list', 'string_or_list', 'dict'];
+    const types = ['string', 'number', 'list', 'string_or_list', 'dict'];
     return types.map(t =>
         `<option value="${t}" ${t === selected ? 'selected' : ''}>${t}</option>`
     ).join('');
@@ -60,9 +60,10 @@ export function dynamicValueToStored(val) {
 
 /**
  * Render all 6 icon toggle buttons for any addition field type (simple or group).
- * Icons: Secret (purple), Required (orange), Optional (teal), Immutable (red), Extend (blue), Dynamic (green)
+ * Icons: Secret (purple), Required (orange), Immutable (red), Extend (blue),
+ *        Dynamic (green), Important (gold)
  */
-function renderFieldIcons({ secret, required, optional, immutable, extendsOnly, isDynamic, allowSecret }) {
+function renderFieldIcons({ secret, required, immutable, extendsOnly, isDynamic, isImportant, allowSecret }) {
     const dynValue = normalizeDynamicValue(isDynamic);
     const dynActive = dynValue !== 'false';
 
@@ -79,10 +80,6 @@ function renderFieldIcons({ secret, required, optional, immutable, extendsOnly, 
                 title="Required — must be provided">
             <i class="fa-solid fa-asterisk"></i>
         </button>
-        <button type="button" class="ass-btf-icon-btn ass-btf-icon-optional${optional ? ' active' : ''}" data-active="${!!optional}"
-                title="Optional — may be omitted or empty">
-            <i class="fa-solid fa-circle-question"></i>
-        </button>
         <button type="button" class="ass-btf-icon-btn ass-btf-icon-immutable${immutable ? ' active' : ''}" data-active="${!!immutable}"
                 title="Immutable — will only be written during initialization">
             <i class="fa-solid fa-lock"></i>
@@ -94,6 +91,10 @@ function renderFieldIcons({ secret, required, optional, immutable, extendsOnly, 
         <button type="button" class="ass-btf-icon-btn ass-btf-icon-dynamic${dynActive ? ' active' : ''}" data-value="${dynValue}"
                 title="Dynamic — entries keyed by name">
             <i class="fa-solid fa-shuffle"></i>
+        </button>
+        <button type="button" class="ass-btf-icon-btn ass-btf-icon-important${isImportant ? ' active' : ''}" data-active="${!!isImportant}"
+                title="Important — significant field for the Agent">
+            <i class="fa-solid fa-star"></i>
         </button>
     </div>`;
 }
@@ -236,10 +237,10 @@ function migrateObjectToArray(obj) {
             };
             if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
             if (field.extends_only) entry.extends_only = true;
-            if (field.optional) entry.optional = true;
             if (field.secret) entry.secret = true;
             if (field.required) entry.required = true;
             if (field.immutable) entry.immutable = true;
+            if (field.is_important) entry.is_important = true;
             return entry;
         }
         const entry = {
@@ -249,10 +250,10 @@ function migrateObjectToArray(obj) {
         };
         if (field.extends_only) entry.extends_only = true;
         if (field.is_dynamic) entry.is_dynamic = field.is_dynamic;
-        if (field.optional) entry.optional = true;
         if (field.secret) entry.secret = true;
         if (field.required) entry.required = true;
         if (field.immutable) entry.immutable = true;
+        if (field.is_important) entry.is_important = true;
         return entry;
     });
 }
@@ -342,8 +343,8 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
     const isDynamic = entry.is_dynamic || false;
     const secret = entry.secret || false;
     const required = entry.required || false;
-    const optional = entry.optional || false;
     const immutable = entry.immutable || false;
+    const isImportant = entry.is_important || false;
     const isNested = depth > 0;
 
     const addSubBtn = !isNested
@@ -355,7 +356,7 @@ function renderAdditionSimple(entry, index, depth, allowSecret) {
     const depthClass = isNested ? 'ass-btf-nested' : '';
 
     const iconsHtml = renderFieldIcons({
-        secret, required, optional, immutable, extendsOnly, isDynamic, allowSecret,
+        secret, required, immutable, extendsOnly, isDynamic, isImportant, allowSecret,
     });
 
     return `
@@ -384,12 +385,12 @@ function renderAdditionGroup(entry, index, depth, allowSecret) {
     const extendsOnly = entry.extends_only || false;
     const secret = entry.secret || false;
     const required = entry.required || false;
-    const optional = entry.optional || false;
     const immutable = entry.immutable || false;
+    const isImportant = entry.is_important || false;
     const fields = entry.fields || [];
 
     const iconsHtml = renderFieldIcons({
-        secret, required, optional, immutable, extendsOnly, isDynamic, allowSecret,
+        secret, required, immutable, extendsOnly, isDynamic, isImportant, allowSecret,
     });
 
     let subfieldsHtml = '';

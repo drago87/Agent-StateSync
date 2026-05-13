@@ -175,7 +175,6 @@ function trackedFieldToEntry(key, field) {
         if (field.required) entry.required = true;
         if (field.immutable) entry.immutable = true;
         if (field.is_important) entry.is_important = true;
-        if (field.is_number) entry.is_number = true;
         return entry;
     }
 
@@ -190,6 +189,5 @@ function trackedFieldToEntry(key, field) {
     if (field.required) entry.required = true;
     if (field.immutable) entry.immutable = true;
     if (field.is_important) entry.is_important = true;
-    if (field.is_number) entry.is_number = true;
     return entry;
 }
