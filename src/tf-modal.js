@@ -1,11 +1,11 @@
 // tf-modal.js — Agent-StateSync Tracked Fields: Modal Panel & Edit Handlers
-// File Version: 1.1.0
+// File Version: 1.2.0
 //
 // Contains: Modal panel (openTFModal, renderModalCategories, closeTFModal,
 //   updateTFButton), edit handlers (addField, addGroupField, saveAsDefault,
 //   loadDefaults, removeField, addSubFieldToGroup, addSubGroup, removeSubField,
-//   findField), modal event binding (bindModalEvents), and the main entry
-//   point initTrackedFieldsUI.
+//   findField, findFieldByPath), modal event binding (bindModalEvents), and the
+//   main entry point initTrackedFieldsUI.
 //
 // Imports from tf-data.js and tf-render.js.
 
@@ -168,11 +168,13 @@ function removeField(category, key) {
 /**
  * Add a simple sub-field to a group.
  * If the parent is a simple field, convert it to a group first.
+ * @param {string} category - Category key
+ * @param {string[]} path - Key path to the parent field
  */
-function addSubFieldToGroup(category, key) {
+function addSubFieldToGroup(category, path) {
     syncFieldsFromDOM();
     const currentFields = getCurrentFields();
-    const field = findField(currentFields[category], key);
+    const field = findFieldByPath(currentFields[category], path);
     if (!field) return;
 
     if (!isGroup(field)) {
@@ -201,11 +203,13 @@ function addSubFieldToGroup(category, key) {
 
 /**
  * Add a sub-group (nested group) to an existing group.
+ * @param {string} category - Category key
+ * @param {string[]} path - Key path to the parent field
  */
-function addSubGroup(category, key) {
+function addSubGroup(category, path) {
     syncFieldsFromDOM();
     const currentFields = getCurrentFields();
-    const field = findField(currentFields[category], key);
+    const field = findFieldByPath(currentFields[category], path);
     if (!field) return;
 
     if (!isGroup(field)) {
@@ -233,10 +237,10 @@ function addSubGroup(category, key) {
     scheduleSave();
 }
 
-function removeSubField(category, parentKey, subKey) {
+function removeSubField(category, parentPath, subKey) {
     syncFieldsFromDOM();
     const currentFields = getCurrentFields();
-    const parent = findField(currentFields[category], parentKey);
+    const parent = findFieldByPath(currentFields[category], parentPath);
     if (!parent?.fields) return;
 
     delete parent.fields[subKey];
@@ -257,6 +261,21 @@ function removeSubField(category, parentKey, subKey) {
 
 function findField(parentObj, key) {
     return parentObj?.[key];
+}
+
+/**
+ * Find a field by following a key path through the nested dict structure.
+ * path is an array of keys, e.g. ["parentGroup", "subGroup"].
+ * Returns the field object at that path, or null if not found.
+ */
+function findFieldByPath(categoryObj, path) {
+    if (!categoryObj || !Array.isArray(path) || path.length === 0) return null;
+    let current = categoryObj;
+    for (const key of path) {
+        if (!current || typeof current !== 'object' || !(key in current)) return null;
+        current = current[key];
+    }
+    return current;
 }
 
 // #############################################
@@ -399,8 +418,8 @@ function bindModalEvents() {
     });
 
     // Input changes — live sync + save
-    // Name changes also update data-key attributes so action buttons stay in sync.
-    // Only update data-key when the new name is non-empty — this preserves the
+    // Name changes also update data-key and data-path attributes so action buttons stay in sync.
+    // Only update data-key/data-path when the new name is non-empty — this preserves the
     // original key as a fallback so the field isn't lost if the user momentarily
     // clears the input (e.g. to retype a new name).
     $modal.on('input.ass-tf', '.ass-tf-name', function () {
@@ -408,8 +427,19 @@ function bindModalEvents() {
         const $field = $(this).closest('.ass-tf-field');
         if (newName) {
             $field.attr('data-key', newName);
-            // Update action buttons inside this field that reference data-key
-            $field.find('> .ass-tf-group-actions .ass-tf-add-subfield, > .ass-tf-group-actions .ass-tf-add-subgroup').attr('data-key', newName);
+            // Update the path: replace the last element with the new name
+            try {
+                const path = JSON.parse($field.attr('data-path') || '[]');
+                if (path.length > 0) {
+                    path[path.length - 1] = newName;
+                    const newPathJson = JSON.stringify(path);
+                    $field.attr('data-path', newPathJson);
+                    // Update action buttons inside this field that reference data-path
+                    $field.find('> .ass-tf-group-actions .ass-tf-add-subfield, > .ass-tf-group-actions .ass-tf-add-subgroup').attr('data-path', newPathJson.replace(/"/g, '&quot;'));
+                    // Update sitemap button if present
+                    $field.find('> .ass-tf-row .ass-tf-add-sub-to-field').attr('data-path', newPathJson.replace(/"/g, '&quot;'));
+                }
+            } catch (e) { /* ignore parse errors */ }
         }
         syncFieldsFromDOM();
         scheduleSave();
@@ -462,30 +492,58 @@ function bindModalEvents() {
         const $field = $(this).closest('.ass-tf-field');
         const category = $field.attr('data-category');
         const depth = parseInt($field.attr('data-depth') || '0', 10);
+        const fieldKey = $field.attr('data-key');
 
         if (depth === 0) {
-            removeField(category, $field.attr('data-key'));
+            removeField(category, fieldKey);
         } else {
+            // Find the parent field's path by reading the parent .ass-tf-field's data-path
             const $parent = $field.parent().closest('.ass-tf-field');
-            const parentKey = $parent.attr('data-key');
-            removeSubField(category, parentKey, $field.attr('data-key'));
+            let parentPath;
+            try {
+                parentPath = JSON.parse($parent.attr('data-path') || '[]');
+            } catch (e) {
+                parentPath = [];
+            }
+            removeSubField(category, parentPath, fieldKey);
         }
     });
 
     // Add sub-field to group
     $modal.on('click.ass-tf', '.ass-tf-add-subfield', function () {
-        addSubFieldToGroup($(this).attr('data-category'), $(this).attr('data-key'));
+        const category = $(this).attr('data-category');
+        let path;
+        try {
+            path = JSON.parse($(this).attr('data-path') || '[]');
+        } catch (e) {
+            path = [];
+        }
+        addSubFieldToGroup(category, path);
     });
 
     // Add sub-field via sitemap button (converts to group)
     $modal.on('click.ass-tf', '.ass-tf-add-sub-to-field', function () {
         const $field = $(this).closest('.ass-tf-field');
-        addSubFieldToGroup($field.attr('data-category'), $field.attr('data-key'));
+        const category = $field.attr('data-category');
+        let path;
+        try {
+            path = JSON.parse($field.attr('data-path') || '[]');
+        } catch (e) {
+            path = [];
+        }
+        addSubFieldToGroup(category, path);
     });
 
     // Add sub-group
     $modal.on('click.ass-tf', '.ass-tf-add-subgroup', function () {
-        addSubGroup($(this).attr('data-category'), $(this).attr('data-key'));
+        const category = $(this).attr('data-category');
+        let path;
+        try {
+            path = JSON.parse($(this).attr('data-path') || '[]');
+        } catch (e) {
+            path = [];
+        }
+        addSubGroup(category, path);
     });
 }
 

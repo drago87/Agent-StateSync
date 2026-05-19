@@ -1,5 +1,5 @@
 // tf-render.js — Agent-StateSync Tracked Fields: Rendering & DOM Sync
-// File Version: 1.1.0
+// File Version: 1.2.0
 //
 // Contains: HTML helpers (escapeAttr, buildTypeOptions), dynamic value helpers
 //   (normalizeDynamicValue, dynamicValueToStored), icon toggle rendering
@@ -218,15 +218,22 @@ export function renderCategory({ key, label, open, allowSecret }) {
 /**
  * Render a field — either simple or group (with nested sub-fields).
  * Supports arbitrary nesting depth.
+ * @param {string} category - Category key (character/scenario/shared)
+ * @param {string} key - Field key at this level
+ * @param {object} field - Field data object
+ * @param {number} depth - Nesting depth (0 = top-level)
+ * @param {boolean} allowSecret - Whether secret icon is allowed
+ * @param {string[]} parentPath - Key path from category root (excluding this key)
  */
-export function renderField(category, key, field, depth, allowSecret) {
+export function renderField(category, key, field, depth, allowSecret, parentPath = []) {
+    const path = [...parentPath, key];
     if (isGroup(field)) {
-        return renderGroupField(category, key, field, depth, allowSecret);
+        return renderGroupField(category, key, field, depth, allowSecret, path);
     }
-    return renderSimpleField(category, key, field, depth, allowSecret);
+    return renderSimpleField(category, key, field, depth, allowSecret, path);
 }
 
-export function renderSimpleField(category, key, field, depth, allowSecret) {
+export function renderSimpleField(category, key, field, depth, allowSecret, path = []) {
     const type = field.type || 'string';
     const hint = field.hint || '';
     const extendsOnly = field.extends_only || false;
@@ -237,10 +244,11 @@ export function renderSimpleField(category, key, field, depth, allowSecret) {
     const immutable = field.immutable || false;
     const isImportant = field.is_important || false;
     const isNested = depth > 0;
+    const pathJson = escapeAttr(JSON.stringify(path));
 
     const addSubBtn = !isNested
         ? `<button class="menu_button ass-tf-add-sub-to-field"
-                  title="Add sub-field (converts to group)">
+                  title="Add sub-field (converts to group)" data-path="${pathJson}">
                <i class="fa-solid fa-sitemap"></i>
            </button>`
         : '';
@@ -252,7 +260,7 @@ export function renderSimpleField(category, key, field, depth, allowSecret) {
     });
 
     return `
-    <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+    <div class="ass-tf-field ${depthClass}" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${pathJson}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
                    placeholder="Field name">
@@ -270,7 +278,7 @@ export function renderSimpleField(category, key, field, depth, allowSecret) {
     </div>`;
 }
 
-export function renderGroupField(category, key, field, depth, allowSecret) {
+export function renderGroupField(category, key, field, depth, allowSecret, path = []) {
     const description = field.description || '';
     const isDynamic = field.is_dynamic || false;
     const extendsOnly = field.extends_only || false;
@@ -280,10 +288,11 @@ export function renderGroupField(category, key, field, depth, allowSecret) {
     const immutable = field.immutable || false;
     const isImportant = field.is_important || false;
     const fields = field.fields || {};
+    const pathJson = escapeAttr(JSON.stringify(path));
 
     let subfieldsHtml = '';
     for (const [subKey, subField] of Object.entries(fields)) {
-        subfieldsHtml += renderField(category, subKey, subField, depth + 1, allowSecret);
+        subfieldsHtml += renderField(category, subKey, subField, depth + 1, allowSecret, path);
     }
 
     const iconsHtml = renderFieldIcons({
@@ -291,7 +300,7 @@ export function renderGroupField(category, key, field, depth, allowSecret) {
     });
 
     return `
-    <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+    <div class="ass-tf-field ass-tf-group" data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}" data-path="${pathJson}">
         <div class="ass-tf-row">
             <input class="text_pole ass-tf-name" value="${escapeAttr(key)}"
                    placeholder="Group name">
@@ -307,11 +316,11 @@ export function renderGroupField(category, key, field, depth, allowSecret) {
         </div>
         <div class="ass-tf-group-actions">
             <button class="menu_button ass-tf-add-subfield"
-                    data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+                    data-category="${category}" data-path="${pathJson}">
                 <i class="fa-solid fa-plus"></i> Add sub-field
             </button>
             <button class="menu_button ass-tf-add-subgroup"
-                    data-category="${category}" data-key="${escapeAttr(key)}" data-depth="${depth}">
+                    data-category="${category}" data-path="${pathJson}">
                 <i class="fa-solid fa-folder-plus"></i> Add sub-group
             </button>
         </div>
