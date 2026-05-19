@@ -267,13 +267,28 @@ function findField(parentObj, key) {
  * Find a field by following a key path through the nested dict structure.
  * path is an array of keys, e.g. ["parentGroup", "subGroup"].
  * Returns the field object at that path, or null if not found.
+ *
+ * The data structure stores child fields inside a .fields property on group
+ * entries.  When navigating deeper, if the current node has a .fields property
+ * (i.e. it is a group), the next key is looked up inside .fields rather than
+ * directly on the current object.  This allows arbitrary nesting depth:
+ *
+ *   categoryObj = {
+ *     topGroup: { description: "", fields: { subGroup: { description: "", fields: { ... } } } }
+ *   }
+ *   path ["topGroup", "subGroup"] →
+ *     step 1: current = categoryObj["topGroup"]  (no .fields → direct lookup)
+ *     step 2: current.fields["subGroup"]         (has .fields → lookup inside it)
  */
 function findFieldByPath(categoryObj, path) {
     if (!categoryObj || !Array.isArray(path) || path.length === 0) return null;
     let current = categoryObj;
     for (const key of path) {
-        if (!current || typeof current !== 'object' || !(key in current)) return null;
-        current = current[key];
+        if (!current || typeof current !== 'object') return null;
+        // If current is a group (has .fields), look up the key inside .fields
+        const container = current.fields !== undefined ? current.fields : current;
+        if (!(key in container)) return null;
+        current = container[key];
     }
     return current;
 }
